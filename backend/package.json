@@ -1,0 +1,1 @@
+{"name":"hammam-attendai-backend","private":true,"version":"1.0.0","type":"module","scripts":{"typecheck":"tsc --noEmit","build":"tsc","test":"node --test dist/tests/*.test.js","start":"node dist/server.js"},"devDependencies":{"typescript":"^5.8.3"}}
