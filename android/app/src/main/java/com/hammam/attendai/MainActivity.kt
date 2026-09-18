@@ -63,7 +63,7 @@ enum class DetailRoute{NONE,STUDENT_HISTORY,APPEAL_FORM,APPEALS_REVIEW,ADMIN_OPE
     var tab by rememberSaveable{mutableStateOf(Tab.DASHBOARD)}
     var detail by rememberSaveable{mutableStateOf(DetailRoute.NONE)}
     val permissions by vm.permissions.collectAsState();val currentRole by vm.currentRole.collectAsState();val homeContext by vm.homeContext.collectAsState()
-    val academicWeekStart by vm.academicWeekStart.collectAsState();val ownerSetupRequired by vm.ownerSetupRequired.collectAsState()
+    val language by vm.language.collectAsState();val theme by vm.theme.collectAsState();val academicWeekStart by vm.academicWeekStart.collectAsState();val ownerSetupRequired by vm.ownerSetupRequired.collectAsState()
     val dash by vm.dashboard.collectAsState(); val students by vm.students.collectAsState();val attendanceLecture by vm.attendanceLecture.collectAsState();val records by vm.activeLectureRecords.collectAsState();val bleState by vm.bleState.collectAsState()
     val selectedStudent by vm.selectedStudent.collectAsState();val selectedStudentRecords by vm.selectedStudentRecords.collectAsState()
     val reportHistory by vm.reportHistory.collectAsState();val reportPreview by vm.reportPreview.collectAsState();val featureFlags by vm.featureFlags.collectAsState();val backendBaseUrl by vm.backendBaseUrl.collectAsState();val backendAuthMasked by vm.backendAuthMasked.collectAsState();val appealState by appealVm.state.collectAsState();val appealRows by appealVm.reviewRows.collectAsState();val appealFilter by appealVm.filter.collectAsState();val aiState by aiVm.state.collectAsState()

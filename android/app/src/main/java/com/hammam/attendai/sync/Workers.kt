@@ -65,4 +65,4 @@ class TimetableReminderWorker(ctx:Context,p:WorkerParameters):CoroutineWorker(ct
         nm.notify((System.currentTimeMillis()/86_400_000L).toInt(),n)
     }
 }
-private fun Boolean.toWorkerResult()=if(this)CoroutineWorker.Result.success() else CoroutineWorker.Result.retry()
+private fun Boolean.toWorkerResult():androidx.work.ListenableWorker.Result=if(this)androidx.work.ListenableWorker.Result.success() else androidx.work.ListenableWorker.Result.retry()

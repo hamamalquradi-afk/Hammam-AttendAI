@@ -13,8 +13,9 @@ class SyncProcessor(private val db:HammamDatabase,private val backend:BackendCli
     suspend fun process():Boolean{
         var all=true
         for(job in db.coreDao().pendingSync()){
-            val payload=decryptOrFail(job.payloadCiphertext,decrypt).getOrElse{
-                db.coreDao().updateSync(job.copy(status=QueueStatus.NEEDS_MANUAL_REVIEW,error="LOCAL_DECRYPT_FAILED")); all=false; continue
+            val payload=decryptOrFail(job.payloadCiphertext,decrypt).getOrNull()
+            if(payload==null){
+                db.coreDao().updateSync(job.copy(status=QueueStatus.NEEDS_MANUAL_REVIEW,error="LOCAL_DECRYPT_FAILED"));all=false;continue
             }
             val r=backend.post("/api/v1/sync/push",payload,job.idempotencyKey)
             val attemptedAt=System.currentTimeMillis();val attempts=job.retryCount+if(r.ok)0 else 1
@@ -34,8 +35,9 @@ class NotificationProcessor(private val db:HammamDatabase,private val backend:Ba
         for(job in db.coreDao().pendingNotifications(now)){
             val path=when(job.channel.uppercase()){ "WHATSAPP"->"/api/v1/notifications/whatsapp"; "EMAIL"->"/api/v1/notifications/email"; else->null }
             if(path==null){db.coreDao().updateNotification(job.copy(status=QueueStatus.CANCELLED,error="Unsupported remote channel"));continue}
-            val payload=decryptOrFail(job.payloadCiphertext,decrypt).getOrElse{
-                db.coreDao().updateNotification(job.copy(status=QueueStatus.NEEDS_MANUAL_REVIEW,error="LOCAL_DECRYPT_FAILED")); all=false; continue
+            val payload=decryptOrFail(job.payloadCiphertext,decrypt).getOrNull()
+            if(payload==null){
+                db.coreDao().updateNotification(job.copy(status=QueueStatus.NEEDS_MANUAL_REVIEW,error="LOCAL_DECRYPT_FAILED"));all=false;continue
             }
             val r=backend.post(path,payload,job.deduplicationKey);val attempts=job.retryCount+if(r.ok)0 else 1
             val status=when{r.ok->QueueStatus.SENT;!r.retryable||attempts>=5->QueueStatus.NEEDS_MANUAL_REVIEW;else->QueueStatus.FAILED}

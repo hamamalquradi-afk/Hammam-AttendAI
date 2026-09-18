@@ -30,7 +30,7 @@ class AttendanceAppealViewModel(app:Application,private val savedStateHandle:Sav
     private val reviewUseCase=ReviewAttendanceAppealUseCase(repository)
     private val _state=MutableStateFlow(AppealUiState())
     val state:StateFlow<AppealUiState> = _state.asStateFlow()
-    private val _filter=MutableStateFlow(savedStateHandle.get<String>("appealFilter")?.let{runCatching{AppealStatus.valueOf(it)}.getOrNull()}?:AppealStatus.PENDING)
+    private val _filter=MutableStateFlow<AppealStatus?>(savedStateHandle.get<String>("appealFilter")?.let{runCatching{AppealStatus.valueOf(it)}.getOrNull()}?:AppealStatus.PENDING)
     val filter:StateFlow<AppealStatus?> = _filter.asStateFlow()
     val appeals:StateFlow<List<AttendanceAppealEntity>> = _filter.flatMapLatest{repository.observeByStatus(it)}
         .stateIn(viewModelScope,SharingStarted.WhileSubscribed(5_000),emptyList())
