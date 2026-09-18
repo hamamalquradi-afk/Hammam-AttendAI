@@ -23,9 +23,9 @@ class AttendanceEngine {
             review -> FinalAttendanceStatus.MANUAL_REVIEW
             present < policy.minimumPresenceVerificationSeconds -> FinalAttendanceStatus.ABSENT
             percentage < policy.partialAttendanceThreshold || percentage <= policy.absenceThreshold -> FinalAttendanceStatus.ABSENT
-            percentage < policy.fullAttendanceThreshold -> FinalAttendanceStatus.PARTIAL
             late > policy.lateAfterMinutes -> FinalAttendanceStatus.LATE
             early > policy.earlyLeaveThresholdMinutes -> FinalAttendanceStatus.LEFT_EARLY
+            percentage < policy.fullAttendanceThreshold -> FinalAttendanceStatus.PARTIAL
             else -> FinalAttendanceStatus.PRESENT
         }
         return AttendanceComputationResult(present, duration, percentage, late, early, status, review)
