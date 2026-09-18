@@ -262,7 +262,6 @@
     <string name="export_configuration">تصدير الإعدادات</string>
     <string name="import_configuration_preview">اختيار إعدادات للمعاينة</string>
     <string name="confirm_import_configuration">تأكيد استيراد الإعدادات</string>
-    <string name="preview">معاينة</string>
     <string name="student_csv_tools">CSV الطلاب</string>
     <string name="select_student_csv">اختيار CSV للمعاينة</string>
     <string name="export_students_csv">تصدير الطلاب المصرح بهم CSV</string>

@@ -262,7 +262,6 @@
     <string name="export_configuration">Export configuration</string>
     <string name="import_configuration_preview">Select configuration for preview</string>
     <string name="confirm_import_configuration">Confirm configuration import</string>
-    <string name="preview">Preview</string>
     <string name="student_csv_tools">Student CSV</string>
     <string name="select_student_csv">Select CSV for preview</string>
     <string name="export_students_csv">Export authorized students CSV</string>
