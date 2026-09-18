@@ -118,9 +118,12 @@ class AttendanceAppealRepository(
         dao.updateAppeal(reviewed)
 
         if(accept) {
+            val updatedPercentage=(newAttendancePercentage ?: record.attendancePercentage).coerceIn(0.0,1.0)
             val updatedRecord=record.copy(
                 finalStatus=newStatus!!,
-                attendancePercentage=newAttendancePercentage ?: record.attendancePercentage,
+                verifiedPresenceSeconds=(record.lectureDurationSeconds*updatedPercentage).toLong(),
+                attendancePercentage=updatedPercentage,
+                source=PresenceSource.MANUAL,
                 notes=listOfNotNull(record.notes,"Appeal ${appeal.id} accepted: ${decisionNote.trim()}").joinToString("\n"),
                 updatedAt=now,
                 version=record.version+1,

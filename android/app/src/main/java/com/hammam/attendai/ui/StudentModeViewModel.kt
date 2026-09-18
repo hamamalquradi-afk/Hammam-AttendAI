@@ -15,6 +15,7 @@ import com.hammam.attendai.data.local.entity.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class StudentModeViewModel(app:Application):AndroidViewModel(app){
     private val container=(app as HammamAttendAiApplication).container
     private val dao=container.database.coreDao()

@@ -41,6 +41,14 @@ jobs:
       - name: Make wrapper executable
         run: chmod +x gradlew
 
+      # Keep the debug signing identity stable across ephemeral GitHub runners so
+      # test APK updates do not unexpectedly require uninstalling the previous build.
+      - name: Restore stable debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: hammam-attendai-debug-keystore-v1
+
       - name: Unit tests
         run: ./gradlew test --stacktrace
 

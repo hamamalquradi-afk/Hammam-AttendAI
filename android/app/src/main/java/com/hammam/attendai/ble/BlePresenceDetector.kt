@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.nio.charset.StandardCharsets
 import java.util.UUID
 
 class BlePresenceDetector(private val context:Context):PresenceDetector {
@@ -37,12 +36,13 @@ class BlePresenceDetector(private val context:Context):PresenceDetector {
             callback=object:ScanCallback(){
                 override fun onScanResult(callbackType:Int,result:ScanResult){
                     val bytes=result.scanRecord?.serviceData?.entries?.firstOrNull{it.key.uuid==serviceUuid}?.value ?: return
-                    val token=bytes.toString(StandardCharsets.UTF_8).take(32)
-                    if(token.isNotBlank())_obs.tryEmit(PresenceObservation(token,result.rssi,System.currentTimeMillis()))
+                    if(bytes.size!=8)return
+                    val token=bytes.joinToString(""){"%02x".format(it.toInt() and 0xff)}
+                    _obs.tryEmit(PresenceObservation(token,result.rssi,System.currentTimeMillis()))
                 }
                 override fun onScanFailed(errorCode:Int){_state.value=DetectorState.Error("SCAN_$errorCode")}
             }
-            val filter=ScanFilter.Builder().setServiceUuid(android.os.ParcelUuid(serviceUuid)).build()
+            val filter=ScanFilter.Builder().setServiceData(android.os.ParcelUuid(serviceUuid),byteArrayOf()).build()
             val settings=ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).setReportDelay(0).build()
             scanner?.startScan(listOf(filter),settings,callback)
             _state.value=DetectorState.Active

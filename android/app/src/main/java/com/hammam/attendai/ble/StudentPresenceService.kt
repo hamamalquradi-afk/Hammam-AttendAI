@@ -88,7 +88,7 @@ class StudentPresenceService:Service(){
                 val lecture=dao.getLectureById(lectureId)?.takeIf{it.status==LectureStatus.ACTIVE&&it.groupId==student.groupId}?:return reportError("NO_ACTIVE_LECTURE")
                 if(!bluetoothReady())return reportError("BLE_ADVERTISE_UNAVAILABLE")
                 val token=container.devices.rotatingToken(device.id)?:return reportError("BLE_TOKEN_UNAVAILABLE")
-                if(!advertiser.start(token))return reportError("BLE_ADVERTISE_UNAVAILABLE")
+                if(!advertiser.start(token){code->reportError("BLE_ADVERTISE_FAILED_$code");presenceJob?.cancel()})return reportError("BLE_ADVERTISE_UNAVAILABLE")
                 _active.value=true
                 delay(20_000)
             }

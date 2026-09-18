@@ -5,6 +5,7 @@ import com.hammam.attendai.data.local.HammamDatabase
 import com.hammam.attendai.data.local.entity.*
 import com.hammam.attendai.domain.model.SemesterStatus
 import com.hammam.attendai.security.AuthorizationRepository
+import com.hammam.attendai.domain.setup.DateInputNormalizer
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
@@ -43,12 +44,24 @@ class AcademicManagementRepository(
     suspend fun addDepartment(facultyId:String,name:String,actorId:String):String{ requireAcademic(actorId);require(name.isNotBlank());return db.withTransaction{
         val v=DepartmentEntity(UUID.randomUUID().toString(),facultyId,name.trim());dao.insertDepartment(v);audit(actorId,"DEPARTMENT_CREATED","Department",v.id,"{\"name\":\"${safe(v.name)}\"}");v.id
     }}
-    suspend fun addAcademicYear(name:String,startDate:String,endDate:String,actorId:String):String{ requireAcademic(actorId);require(name.isNotBlank()&&startDate<endDate);return db.withTransaction{
-        val v=AcademicYearEntity(UUID.randomUUID().toString(),name.trim(),startDate,endDate,true);dao.insertAcademicYear(v);audit(actorId,"ACADEMIC_YEAR_CREATED","AcademicYear",v.id,"{\"name\":\"${safe(v.name)}\"}");v.id
-    }}
-    suspend fun addSemester(name:String,academicYearId:String,startDate:String,endDate:String,actorId:String,status:SemesterStatus=SemesterStatus.UPCOMING):String{ requireAcademic(actorId);require(name.isNotBlank()&&startDate<endDate);return db.withTransaction{
-        val now=System.currentTimeMillis();val v=SemesterEntity(UUID.randomUUID().toString(),name.trim(),academicYearId,startDate,endDate,status,now,now);dao.insertSemester(v);audit(actorId,"SEMESTER_CREATED","Semester",v.id,"{\"name\":\"${safe(v.name)}\",\"status\":\"${v.status}\"}");v.id
-    }}
+    suspend fun addAcademicYear(name:String,startDate:String,endDate:String,actorId:String):String{
+        requireAcademic(actorId);require(name.isNotBlank()){"ACADEMIC_YEAR_NAME_REQUIRED"}
+        val (canonicalStart,canonicalEnd)=DateInputNormalizer.canonicalRange(startDate,endDate)
+        return db.withTransaction{
+            val v=AcademicYearEntity(UUID.randomUUID().toString(),name.trim(),canonicalStart,canonicalEnd,true);dao.insertAcademicYear(v);audit(actorId,"ACADEMIC_YEAR_CREATED","AcademicYear",v.id,"{\"name\":\"${safe(v.name)}\"}");v.id
+        }
+    }
+    suspend fun addSemester(name:String,academicYearId:String,startDate:String,endDate:String,actorId:String,status:SemesterStatus=SemesterStatus.UPCOMING):String{
+        requireAcademic(actorId);require(name.isNotBlank()){"SEMESTER_NAME_REQUIRED"}
+        val year=dao.getAcademicYearById(academicYearId)?:error("ACADEMIC_YEAR_NOT_FOUND")
+        val (canonicalStart,canonicalEnd)=DateInputNormalizer.canonicalRange(startDate,endDate)
+        val semesterStart=java.time.LocalDate.parse(canonicalStart);val semesterEnd=java.time.LocalDate.parse(canonicalEnd)
+        val yearStart=java.time.LocalDate.parse(year.startDate);val yearEnd=java.time.LocalDate.parse(year.endDate)
+        require(!semesterStart.isBefore(yearStart)&&!semesterEnd.isAfter(yearEnd)){"SEMESTER_OUTSIDE_ACADEMIC_YEAR"}
+        return db.withTransaction{
+            val now=System.currentTimeMillis();val v=SemesterEntity(UUID.randomUUID().toString(),name.trim(),academicYearId,canonicalStart,canonicalEnd,status,now,now);dao.insertSemester(v);audit(actorId,"SEMESTER_CREATED","Semester",v.id,"{\"name\":\"${safe(v.name)}\",\"status\":\"${v.status}\"}");v.id
+        }
+    }
     suspend fun addLevel(departmentId:String,name:String,order:Int,actorId:String):String{ requireAcademic(actorId);require(name.isNotBlank());return db.withTransaction{
         val v=LevelEntity(UUID.randomUUID().toString(),departmentId,name.trim(),order);dao.insertLevel(v);audit(actorId,"LEVEL_CREATED","Level",v.id,"{\"name\":\"${safe(v.name)}\"}");v.id
     }}
@@ -82,13 +95,18 @@ class AcademicManagementRepository(
     data class RolloverOptions(val copySubjects:Boolean=true,val copyTimetableTemplate:Boolean=false)
     data class RolloverResult(val newSemesterId:String,val copiedSubjects:Int,val copiedTimetableRows:Int)
     suspend fun closeSemesterAndStartNew(oldSemesterId:String,newName:String,newAcademicYearId:String,startDate:String,endDate:String,actorId:String,options:RolloverOptions=RolloverOptions()):RolloverResult{
-        requireAcademic(actorId);require(newName.isNotBlank()&&startDate<endDate)
+        requireAcademic(actorId);require(newName.isNotBlank()){"SEMESTER_NAME_REQUIRED"}
+        val (canonicalStart,canonicalEnd)=DateInputNormalizer.canonicalRange(startDate,endDate)
+        val year=dao.getAcademicYearById(newAcademicYearId)?:error("ACADEMIC_YEAR_NOT_FOUND")
+        val semesterStart=java.time.LocalDate.parse(canonicalStart);val semesterEnd=java.time.LocalDate.parse(canonicalEnd)
+        val yearStart=java.time.LocalDate.parse(year.startDate);val yearEnd=java.time.LocalDate.parse(year.endDate)
+        require(!semesterStart.isBefore(yearStart)&&!semesterEnd.isAfter(yearEnd)){"SEMESTER_OUTSIDE_ACADEMIC_YEAR"}
         return db.withTransaction{
             require(dao.countActiveLecturesInSemester(oldSemesterId)==0){"ACTIVE_LECTURES_EXIST"}
             require(dao.countPendingReviewsInSemester(oldSemesterId)==0){"PENDING_ATTENDANCE_REVIEWS_EXIST"}
             val old=dao.getSemesterById(oldSemesterId)?:error("SEMESTER_NOT_FOUND")
             val now=System.currentTimeMillis();dao.updateSemester(old.copy(status=SemesterStatus.COMPLETED,updatedAt=now))
-            val newId=UUID.randomUUID().toString();dao.insertSemester(SemesterEntity(newId,newName.trim(),newAcademicYearId,startDate,endDate,SemesterStatus.UPCOMING,now,now))
+            val newId=UUID.randomUUID().toString();dao.insertSemester(SemesterEntity(newId,newName.trim(),newAcademicYearId,canonicalStart,canonicalEnd,SemesterStatus.UPCOMING,now,now))
             var copied=0;var timetableRows=0
             if(options.copySubjects){
                 val mapping=mutableMapOf<String,String>()

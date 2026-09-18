@@ -56,8 +56,20 @@ enum class DetailRoute{NONE,STUDENT_HISTORY,APPEAL_FORM,APPEALS_REVIEW,ADMIN_OPE
 
 @Composable fun MainShell(vm:MainViewModel,appealVm:AttendanceAppealViewModel,aiVm:AiAssistantViewModel,studentVm:StudentModeViewModel,adminVm:AdminOperationsViewModel,onBiometricUnlock:()->Unit){
     val firstRun by vm.firstRunComplete.collectAsState()
+    val message by vm.message.collectAsState()
+    val firstRunInProgress by vm.firstRunInProgress.collectAsState()
+    val firstRunRecoveryAdmin by vm.firstRunRecoveryAdmin.collectAsState()
     if(firstRun==null){Surface{CircularProgressIndicator()};return}
-    if(firstRun==false){FirstRunScreen(vm::completeFirstRun);return}
+    if(firstRun==false){
+        FirstRunScreen(
+            onComplete=vm::completeFirstRun,
+            isSubmitting=firstRunInProgress,
+            errorMessage=message,
+            recoveryAdminName=firstRunRecoveryAdmin?.displayName,
+            onRecoverExistingOwner=vm::recoverExistingAdministratorAsOwner,
+        )
+        return
+    }
     val appUnlocked by vm.appUnlocked.collectAsState();val appLockConfigured by vm.appLockConfigured.collectAsState();val biometricEnabled by vm.biometricEnabled.collectAsState()
     if(firstRun==true && appLockConfigured && !appUnlocked){AppLockScreen(biometricEnabled,vm::unlockWithPin,onBiometricUnlock);return}
     var tab by rememberSaveable{mutableStateOf(Tab.DASHBOARD)}
@@ -69,14 +81,14 @@ enum class DetailRoute{NONE,STUDENT_HISTORY,APPEAL_FORM,APPEALS_REVIEW,ADMIN_OPE
     val reportHistory by vm.reportHistory.collectAsState();val reportPreview by vm.reportPreview.collectAsState();val featureFlags by vm.featureFlags.collectAsState();val backendBaseUrl by vm.backendBaseUrl.collectAsState();val backendAuthMasked by vm.backendAuthMasked.collectAsState();val appealState by appealVm.state.collectAsState();val appealRows by appealVm.reviewRows.collectAsState();val appealFilter by appealVm.filter.collectAsState();val aiState by aiVm.state.collectAsState()
     val studentSelf by studentVm.student.collectAsState();val studentLecture by studentVm.activeLecture.collectAsState();val studentDevices by studentVm.devices.collectAsState();val studentRecords by studentVm.records.collectAsState();val replacementRequests by studentVm.replacementRequests.collectAsState();val studentAdvertising by studentVm.advertising.collectAsState();val studentPresenceError by studentVm.presenceError.collectAsState();val pairingPayload by studentVm.pairingPayload.collectAsState();val qrPayload by studentVm.qrPayload.collectAsState()
     val adminUniversities by adminVm.universities.collectAsState();val adminFaculties by adminVm.faculties.collectAsState();val adminDepartments by adminVm.departments.collectAsState();val adminYears by adminVm.academicYears.collectAsState();val adminSemesters by adminVm.semesters.collectAsState();val adminLevels by adminVm.levels.collectAsState();val adminBatches by adminVm.batches.collectAsState();val adminSections by adminVm.sections.collectAsState();val adminGroups by adminVm.groups.collectAsState();val adminTeachers by adminVm.teachers.collectAsState();val adminSubjects by adminVm.subjects.collectAsState();val adminVersions by adminVm.timetableVersions.collectAsState();val timetableReview by adminVm.review.collectAsState();val adminMessage by adminVm.message.collectAsState()
-    val message by vm.message.collectAsState();val studentMessage by studentVm.message.collectAsState();val snackbar=remember{SnackbarHostState()}
+    val studentMessage by studentVm.message.collectAsState();val snackbar=remember{SnackbarHostState()}
     LaunchedEffect(message){message?.let{snackbar.showSnackbar(it);vm.clearMessage()}}
     LaunchedEffect(studentMessage){studentMessage?.let{snackbar.showSnackbar(it);studentVm.clearMessage()}}
     LaunchedEffect(adminMessage){adminMessage?.let{snackbar.showSnackbar(it);adminVm.clearMessage()}}
     val items=buildList{
         add(Tab.DASHBOARD to R.string.dashboard)
         if(currentRole=="Student")add(Tab.MY_ATTENDANCE to R.string.my_attendance)
-        if(permissions.any{it in setOf("START_LECTURE","END_LECTURE","EDIT_ATTENDANCE")})add(Tab.ATTENDANCE to R.string.attendance)
+        if(permissions.any{it in setOf("START_LECTURE","END_LECTURE","EDIT_ATTENDANCE","APPROVE_ATTENDANCE")})add(Tab.ATTENDANCE to R.string.attendance)
         if(permissions.any{it in setOf("VIEW_STUDENTS","EDIT_STUDENTS")})add(Tab.STUDENTS to R.string.students)
         if(permissions.any{it in setOf("VIEW_REPORTS","SEND_REPORTS")})add(Tab.REPORTS to R.string.reports)
         if(featureFlags.firstOrNull{it.code=="AI_ASSISTANT"}?.enabled==true)add(Tab.AI to R.string.ai_nav)
@@ -109,7 +121,7 @@ enum class DetailRoute{NONE,STUDENT_HISTORY,APPEAL_FORM,APPEALS_REVIEW,ADMIN_OPE
                     Tab.STUDENTS->StudentsScreen(students,vm::addStudent){s->vm.selectStudent(s.id);detail=DetailRoute.STUDENT_HISTORY}
                     Tab.REPORTS->ReportsScreen(reportHistory,reportPreview,vm::generateCurrentReport,vm::approveReport,vm::retryReport,vm::loadReportPreview,vm::clearReportPreview,vm::cancelReport,vm::regenerateReport)
                     Tab.AI->AiAssistantScreen(aiState,aiVm::setQuery,aiVm::ask,aiVm::summarizeWithCloud)
-                    Tab.SETTINGS->SettingsScreen(permissions.contains("REVIEW_APPEALS"),permissions.contains("MANAGE_SETTINGS"),permissions.any{it in setOf("MANAGE_ACADEMIC_STRUCTURE","MANAGE_TEACHERS","MANAGE_SUBJECTS","MANAGE_TIMETABLE","MANAGE_REPORT_SETTINGS","MANAGE_AI_PROVIDER","MANAGE_BACKUP","RUN_DATA_INTEGRITY")},currentRole in setOf("SYSTEM_OWNER","System Owner","Administrator","Representative"),permissions.contains("VIEW_SYSTEM_HEALTH"),appLockConfigured,biometricEnabled,language,theme,academicWeekStart,ownerSetupRequired&&currentRole=="Administrator",backendBaseUrl,backendAuthMasked,featureFlags,dash,vm::setBackendBaseUrl,vm::setBackendAuthToken,vm::deleteBackendAuthToken,vm::setFeatureFlag,vm::configureAppLockPin,vm::disableAppLock,vm::setBiometricAppLock,vm::setLanguage,vm::setTheme,vm::setAcademicWeekStart,vm::claimUpgradeSystemOwner,onOpenAppeals={appealVm.setFilter(com.hammam.attendai.domain.model.AppealStatus.PENDING);detail=DetailRoute.APPEALS_REVIEW},onOpenManagement={detail=DetailRoute.ADMIN_OPERATIONS})
+                    Tab.SETTINGS->SettingsScreen(permissions.contains("REVIEW_APPEALS"),permissions.contains("MANAGE_SETTINGS"),permissions.any{it in setOf("MANAGE_USERS","MANAGE_ROLES","MANAGE_PERMISSIONS","MANAGE_ACADEMIC_STRUCTURE","MANAGE_TEACHERS","MANAGE_SUBJECTS","MANAGE_TIMETABLE","MANAGE_REPORT_SETTINGS","MANAGE_AI_PROVIDER","MANAGE_BACKUP","MANAGE_CONFIGURATION","RUN_DATA_INTEGRITY","EDIT_STUDENTS","MANAGE_DEVICE_ENROLLMENT")},currentRole in setOf("SYSTEM_OWNER","System Owner","Administrator","Representative"),permissions.contains("VIEW_SYSTEM_HEALTH"),appLockConfigured,biometricEnabled,language,theme,academicWeekStart,ownerSetupRequired&&currentRole=="Administrator",backendBaseUrl,backendAuthMasked,featureFlags,dash,vm::setBackendBaseUrl,vm::setBackendAuthToken,vm::deleteBackendAuthToken,vm::setFeatureFlag,vm::configureAppLockPin,vm::disableAppLock,vm::setBiometricAppLock,vm::setLanguage,vm::setTheme,vm::setAcademicWeekStart,vm::claimUpgradeSystemOwner,onOpenAppeals={appealVm.setFilter(com.hammam.attendai.domain.model.AppealStatus.PENDING);detail=DetailRoute.APPEALS_REVIEW},onOpenManagement={detail=DetailRoute.ADMIN_OPERATIONS})
                 }
             }
         }

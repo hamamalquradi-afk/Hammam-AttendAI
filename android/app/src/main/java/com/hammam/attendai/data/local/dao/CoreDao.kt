@@ -24,6 +24,7 @@ interface CoreDao {
     @Query("DELETE FROM user_roles WHERE userId=:userId") suspend fun clearUserRoles(userId:String)
     @Query("SELECT COUNT(*) FROM users") suspend fun countUsers():Int
     @Query("""SELECT u.* FROM users u JOIN user_roles ur ON ur.userId=u.id JOIN roles r ON r.id=ur.roleId WHERE r.name='SYSTEM_OWNER' AND u.isActive=1 ORDER BY u.createdAt LIMIT 1""") suspend fun getSystemOwnerUser():UserEntity?
+    @Query("""SELECT u.* FROM users u JOIN user_roles ur ON ur.userId=u.id JOIN roles r ON r.id=ur.roleId WHERE r.name='Administrator' AND u.isActive=1 ORDER BY u.createdAt LIMIT 1""") suspend fun getActiveAdministratorUser():UserEntity?
     @Query("SELECT DISTINCT r.name FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId ORDER BY r.name") suspend fun getRoleNames(userId:String):List<String>
     @Query("SELECT r.name AS roleName,p.code AS permissionCode FROM role_permissions rp JOIN roles r ON r.id=rp.roleId JOIN permissions p ON p.id=rp.permissionId ORDER BY r.name,p.code") suspend fun getRolePermissionExport():List<RolePermissionExportRow>
     @Query("SELECT DISTINCT r.name FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId ORDER BY r.name") fun observeRoleNames(userId:String):Flow<List<String>>

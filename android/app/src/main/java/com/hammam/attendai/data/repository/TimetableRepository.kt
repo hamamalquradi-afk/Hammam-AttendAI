@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.hammam.attendai.data.local.HammamDatabase
 import com.hammam.attendai.data.local.entity.*
 import com.hammam.attendai.security.AuthorizationRepository
+import com.hammam.attendai.domain.setup.DateInputNormalizer
 import kotlinx.coroutines.flow.Flow
 import java.time.*
 import java.util.UUID
@@ -22,11 +23,11 @@ class TimetableRepository(
 
     suspend fun createDraft(groupId:String,weekStart:String,sourceType:String,sourceUri:String?,actorId:String):String{
         require(authorization.hasScopedPermission(actorId,"MANAGE_TIMETABLE","GROUP",groupId)){"MANAGE_TIMETABLE_PERMISSION_REQUIRED"}
-        val start=LocalDate.parse(weekStart);val end=start.plusDays(6);val now=System.currentTimeMillis()
+        val start=DateInputNormalizer.parse(weekStart);val canonicalWeekStart=start.toString();val end=start.plusDays(6);val now=System.currentTimeMillis()
         return db.withTransaction{
-            val version=dao.maxWeeklyTimetableVersion(groupId,weekStart)+1;val id=UUID.randomUUID().toString()
-            dao.insertWeeklyTimetableVersion(WeeklyTimetableVersionEntity(id,groupId,start.toString(),end.toString(),version,"DRAFT",sourceType,sourceUri,actorId,null,now,now,null,null))
-            audit(actorId,"TIMETABLE_DRAFT_CREATED",id,"{\"groupId\":\"$groupId\",\"weekStart\":\"$weekStart\",\"source\":\"${safe(sourceType)}\"}",null)
+            val version=dao.maxWeeklyTimetableVersion(groupId,canonicalWeekStart)+1;val id=UUID.randomUUID().toString()
+            dao.insertWeeklyTimetableVersion(WeeklyTimetableVersionEntity(id,groupId,canonicalWeekStart,end.toString(),version,"DRAFT",sourceType,sourceUri,actorId,null,now,now,null,null))
+            audit(actorId,"TIMETABLE_DRAFT_CREATED",id,"{\"groupId\":\"$groupId\",\"weekStart\":\"$canonicalWeekStart\",\"source\":\"${safe(sourceType)}\"}",null)
             id
         }
     }

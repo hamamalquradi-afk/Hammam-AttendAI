@@ -27,6 +27,7 @@ data class DeviceReplacementReviewRow(
     val universityNumber:String?,
 )
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class AdminOperationsViewModel(app:Application):AndroidViewModel(app){
     private val container=(app as HammamAttendAiApplication).container
     private val repo=container.academic

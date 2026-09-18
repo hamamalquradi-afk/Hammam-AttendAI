@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.core.content.ContextCompat
+import androidx.room.withTransaction
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,8 @@ import com.hammam.attendai.HammamAttendAiApplication
 import com.hammam.attendai.data.local.entity.*
 import com.hammam.attendai.data.repository.LectureActionResult
 import com.hammam.attendai.domain.model.FinalAttendanceStatus
+import com.hammam.attendai.domain.setup.FirstRunSetup
+import com.hammam.attendai.domain.setup.FirstRunSetupValidator
 import com.hammam.attendai.sync.WorkOrchestrator
 import com.hammam.attendai.ble.AttendanceForegroundService
 import com.hammam.attendai.ble.DetectorState
@@ -50,6 +53,7 @@ data class DashboardState(
     val recentSanitizedErrors:List<String> = emptyList(),
 )
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MainViewModel(app:Application,private val savedStateHandle:SavedStateHandle):AndroidViewModel(app){
     private val application=app
     private val container=(app as HammamAttendAiApplication).container
@@ -114,16 +118,33 @@ class MainViewModel(app:Application,private val savedStateHandle:SavedStateHandl
     private val _biometricEnabled=MutableStateFlow(container.appLock.biometricEnabled());val biometricEnabled=_biometricEnabled.asStateFlow()
     private val _message=MutableStateFlow<String?>(null)
     val message:StateFlow<String?> = _message.asStateFlow()
+    private val _firstRunInProgress=MutableStateFlow(false)
+    val firstRunInProgress:StateFlow<Boolean> = _firstRunInProgress.asStateFlow()
+    private val _firstRunRecoveryAdmin=MutableStateFlow<UserEntity?>(null)
+    val firstRunRecoveryAdmin:StateFlow<UserEntity?> = _firstRunRecoveryAdmin.asStateFlow()
     private var attendanceMutationInFlight=false
     private val _reportPreview=MutableStateFlow<GeneratedReportEntity?>(null)
     val reportPreview:StateFlow<GeneratedReportEntity?> = _reportPreview.asStateFlow()
 
     init {
         refreshSystemHealth()
-        viewModelScope.launch{
-            if(!container.preferences.firstRunComplete.first() && dao.countUsers()>0){
-                dao.getSystemOwnerUser()?.let{owner->container.preferences.completeFirstRun(owner.id,"SYSTEM_OWNER",container.preferences.language.first())}
-            }
+        viewModelScope.launch{refreshFirstRunRecoveryState()}
+    }
+
+    private suspend fun refreshFirstRunRecoveryState(){
+        if(container.preferences.firstRunComplete.first()){_firstRunRecoveryAdmin.value=null;return}
+        val owner=dao.getSystemOwnerUser()
+        if(owner!=null){
+            container.preferences.completeFirstRun(owner.id,"SYSTEM_OWNER",container.preferences.language.first())
+            _firstRunRecoveryAdmin.value=null
+            return
+        }
+        if(dao.countUsers()>0){
+            val admin=dao.getActiveAdministratorUser()
+            _firstRunRecoveryAdmin.value=admin
+            if(admin==null)_message.value="EXISTING_DATABASE_NO_ADMIN"
+        }else{
+            _firstRunRecoveryAdmin.value=null
         }
     }
 
@@ -153,20 +174,59 @@ class MainViewModel(app:Application,private val savedStateHandle:SavedStateHandl
 
     private fun sanitizeHealthError(value:String?):String?=value?.take(160)?.replace(Regex("(?i)(sk-[A-Za-z0-9_-]+|AIza[A-Za-z0-9_-]+|bearer\\s+[A-Za-z0-9._-]+)"),"[REDACTED]")
 
-    fun completeFirstRun(setup:FirstRunSetup){viewModelScope.launch{
-        runCatching{
-            require(dao.countUsers()==0){"DATABASE_ALREADY_INITIALIZED"}
-            val userId=container.authorization.createInitialOwner(setup.displayName)
-            container.featureFlags.seedDefaults()
-            setup.pin?.takeIf{it.length in 4..12}?.let{container.appLock.setPin(it.toCharArray())}
-            val yearId=if(setup.academicYearName.isNotBlank()&&setup.academicYearStart.isNotBlank()&&setup.academicYearEnd.isNotBlank())
-                container.academic.addAcademicYear(setup.academicYearName,setup.academicYearStart,setup.academicYearEnd,userId) else null
-            if(yearId!=null&&setup.semesterName.isNotBlank()&&setup.semesterStart.isNotBlank()&&setup.semesterEnd.isNotBlank())
-                container.academic.addSemester(setup.semesterName,yearId,setup.semesterStart,setup.semesterEnd,userId)
-            container.preferences.completeFirstRun(userId,"SYSTEM_OWNER",setup.language)
-            if(setup.pin?.length in 4..12){_appLockConfigured.value=true;_appUnlocked.value=true}
-        }.onFailure{_message.value=it.message?:"FIRST_RUN_SETUP_FAILED"}
-    }}
+    fun completeFirstRun(setup:FirstRunSetup){
+        if(_firstRunInProgress.value)return
+        viewModelScope.launch{
+            _firstRunInProgress.value=true
+            try{
+                val normalized=FirstRunSetupValidator.normalize(setup)
+                require(dao.countUsers()==0){"DATABASE_ALREADY_INITIALIZED"}
+                var createdUserId:String?=null
+                container.database.withTransaction{
+                    val userId=container.authorization.createInitialOwner(normalized.displayName)
+                    createdUserId=userId
+                    container.featureFlags.seedDefaults()
+                    val yearId=if(normalized.academicYearName.isNotBlank())
+                        container.academic.addAcademicYear(normalized.academicYearName,normalized.academicYearStart,normalized.academicYearEnd,userId) else null
+                    if(yearId!=null&&normalized.semesterName.isNotBlank())
+                        container.academic.addSemester(normalized.semesterName,yearId,normalized.semesterStart,normalized.semesterEnd,userId)
+                }
+                val userId=createdUserId?:error("FIRST_RUN_OWNER_CREATION_FAILED")
+                var pinFailed=false
+                normalized.pin?.let{pin->
+                    runCatching{container.appLock.setPin(pin.toCharArray())}.onFailure{container.appLock.clear();pinFailed=true}
+                }
+                container.preferences.completeFirstRun(userId,"SYSTEM_OWNER",normalized.language)
+                if(normalized.pin!=null&&!pinFailed){_appLockConfigured.value=true;_appUnlocked.value=true}
+                _firstRunRecoveryAdmin.value=null
+                _message.value=if(pinFailed)"PIN_SETUP_FAILED" else null
+            }catch(t:Throwable){
+                _message.value=t.message?:"FIRST_RUN_SETUP_FAILED"
+                refreshFirstRunRecoveryState()
+            }finally{
+                _firstRunInProgress.value=false
+            }
+        }
+    }
+
+    fun recoverExistingAdministratorAsOwner(){
+        if(_firstRunInProgress.value)return
+        viewModelScope.launch{
+            _firstRunInProgress.value=true
+            try{
+                val admin=dao.getActiveAdministratorUser()?:error("EXISTING_DATABASE_NO_ADMIN")
+                container.authorization.seedAuthorizationModel()
+                container.authorization.claimUpgradeSystemOwner(admin.id)
+                container.preferences.completeFirstRun(admin.id,"SYSTEM_OWNER",container.preferences.language.first())
+                _firstRunRecoveryAdmin.value=null
+                _message.value=null
+            }catch(t:Throwable){
+                _message.value=t.message?:"FIRST_RUN_RECOVERY_FAILED"
+            }finally{
+                _firstRunInProgress.value=false
+            }
+        }
+    }
     fun addStudent(name:String,number:String?){viewModelScope.launch{
         val actor=currentUserId.value
         if(!container.authorization.hasPermission(actor,"EDIT_STUDENTS")){_message.value="EDIT_STUDENTS_PERMISSION_REQUIRED";return@launch}

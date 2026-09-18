@@ -338,4 +338,21 @@
     <string name="no_pending_device_requests">لا توجد طلبات أجهزة معلقة.</string>
     <string name="enrolled_at">تاريخ التسجيل: %1$s</string>
     <string name="presence_detection_problem">مشكلة في اكتشاف الحضور: %1$s</string>
+    <string name="date_input_hint">استخدم YYYY-MM-DD أو DD/MM/YYYY</string>
+    <string name="setup_in_progress">جارٍ حفظ الإعداد…</string>
+    <string name="first_run_recovery_title">تم العثور على بيانات سابقة</string>
+    <string name="first_run_recovery_note">يوجد حساب Administrator سابق باسم %1$s. يمكنك ترقيته إلى مالك النظام مع الحفاظ على البيانات الحالية.</string>
+    <string name="recover_existing_owner">استعادة المالك من البيانات السابقة</string>
+    <string name="first_run_error_owner_name">أدخل اسم مالك النظام.</string>
+    <string name="first_run_error_pin">يجب أن يكون PIN من 4 إلى 12 رقمًا.</string>
+    <string name="first_run_error_year_incomplete">أكمل اسم السنة الأكاديمية وتاريخي البداية والنهاية، أو اتركها كلها فارغة.</string>
+    <string name="first_run_error_semester_incomplete">أكمل اسم الفصل وتاريخي البداية والنهاية، أو اتركها كلها فارغة.</string>
+    <string name="first_run_error_invalid_date">صيغة التاريخ غير صحيحة. استخدم YYYY-MM-DD أو DD/MM/YYYY.</string>
+    <string name="first_run_error_date_range">يجب أن يكون تاريخ النهاية بعد تاريخ البداية.</string>
+    <string name="first_run_error_semester_requires_year">لا يمكن إنشاء فصل بدون سنة أكاديمية مكتملة.</string>
+    <string name="first_run_error_semester_outside_year">يجب أن تكون تواريخ الفصل داخل حدود السنة الأكاديمية.</string>
+    <string name="first_run_error_existing_database">توجد بيانات محلية سابقة، لذلك لم يتم إنشاء مالك جديد لتجنب فقدان أو تضارب البيانات.</string>
+    <string name="first_run_error_existing_no_admin">توجد بيانات سابقة ولكن لا يوجد Administrator نشط يمكن ترقيته. استخدم نسخة احتياطية صحيحة أو امسح بيانات التطبيق فقط إذا كنت تريد بدء قاعدة جديدة.</string>
+    <string name="first_run_error_pin_storage">تم حفظ الإعداد، لكن تعذر تفعيل PIN. يمكنك ضبطه لاحقًا من الإعدادات.</string>
+    <string name="first_run_error_generic">تعذر إكمال الإعداد. راجع البيانات وحاول مرة أخرى.</string>
 </resources>

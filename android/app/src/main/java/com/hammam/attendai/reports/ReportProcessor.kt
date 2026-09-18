@@ -49,8 +49,12 @@ class ReportProcessor(private val context:Context,private val db:HammamDatabase,
                     val payload=reportPayload(job.id,job.teacherId,job.subjectId,channel,generated.format,file,generated.hash)
                     val r=backend.post("/api/v1/reports/send",payload,"report:${job.deduplicationKey}:${job.version}")
                     if(r.ok){dao.updateReport(job.copy(status=ReportJobStatus.SENT,sentAt=System.currentTimeMillis(),providerMessageId=r.providerMessageId,errorMessage=null,version=job.version+1))}
-                    else if(r.retryable){dao.updateReport(job.copy(status=ReportJobStatus.PENDING_SEND,retryCount=job.retryCount+1,errorMessage=r.error,version=job.version+1));all=false}
-                    else dao.updateReport(job.copy(status=ReportJobStatus.FAILED,retryCount=job.retryCount+1,errorMessage=r.error,version=job.version+1))
+                    else {
+                        val attempts=job.retryCount+1
+                        val retryAgain=r.retryable && attempts<5
+                        dao.updateReport(job.copy(status=if(retryAgain)ReportJobStatus.PENDING_SEND else ReportJobStatus.FAILED,retryCount=attempts,errorMessage=r.error,version=job.version+1))
+                        if(retryAgain)all=false
+                    }
                 }
             }catch(e:Exception){
                 dao.updateReport(job.copy(status=ReportJobStatus.FAILED,retryCount=job.retryCount+1,errorMessage=e.javaClass.simpleName+":"+(e.message?:""),version=job.version+1));all=false

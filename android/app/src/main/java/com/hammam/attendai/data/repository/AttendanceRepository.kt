@@ -55,6 +55,10 @@ class AttendanceRepository(private val db:HammamDatabase,private val authorizati
         val session=dao.getSessionById(sessionId)?:return@withTransaction false
         if(session.status!="ACTIVE")return@withTransaction false
         val lecture=dao.getLectureById(session.lectureId)?:return@withTransaction false
+        val student=dao.getStudentById(studentId)?:return@withTransaction false
+        if(student.status!=StudentStatus.ACTIVE || student.groupId!=lecture.groupId)return@withTransaction false
+        val device=dao.getStudentDevice(deviceId)?:return@withTransaction false
+        if(device.studentId!=studentId || device.status!=DeviceStatus.ACTIVE)return@withTransaction false
         val clockAnomaly=clockGuard.observe(sessionId,timestamp)
         val existingRecord=dao.getAttendanceRecord(lecture.id,studentId)
         val record=existingRecord ?: run {
@@ -183,6 +187,9 @@ class AttendanceRepository(private val db:HammamDatabase,private val authorizati
             notes=listOfNotNull(record.notes,"MANUAL_OVERRIDE: ${reason.trim()}").joinToString(" | "),updatedAt=now,version=record.version+1
         )
         dao.upsertRecord(updated)
+        if(lecture.status==LectureStatus.COMPLETED && updated.approvalStatus==ApprovalStatus.DRAFT){
+            dao.updateLecture(lecture.copy(status=LectureStatus.NEEDS_REVIEW,updatedAt=now,version=lecture.version+1))
+        }
         dao.insertAudit(AuditLogEntity(UUID.randomUUID().toString(),actorId,"ATTENDANCE_EDITED","AttendanceRecord",record.id,"{\"status\":\"${record.finalStatus}\",\"percentage\":${record.attendancePercentage}}","{\"status\":\"$status\",\"percentage\":$pct}",reason.trim(),now,authorization?.roleNames(actorId)?.firstOrNull()))
         true
     }

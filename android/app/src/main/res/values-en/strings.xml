@@ -338,4 +338,21 @@
     <string name="no_pending_device_requests">No pending device requests.</string>
     <string name="enrolled_at">Enrolled at: %1$s</string>
     <string name="presence_detection_problem">Presence Detection Problem: %1$s</string>
+    <string name="date_input_hint">Use YYYY-MM-DD or DD/MM/YYYY</string>
+    <string name="setup_in_progress">Saving setup…</string>
+    <string name="first_run_recovery_title">Existing data found</string>
+    <string name="first_run_recovery_note">An existing Administrator account named %1$s was found. You can promote it to System Owner while keeping the current data.</string>
+    <string name="recover_existing_owner">Recover owner from existing data</string>
+    <string name="first_run_error_owner_name">Enter the System Owner name.</string>
+    <string name="first_run_error_pin">PIN must contain 4 to 12 digits.</string>
+    <string name="first_run_error_year_incomplete">Complete the academic year name, start date, and end date, or leave all three blank.</string>
+    <string name="first_run_error_semester_incomplete">Complete the semester name, start date, and end date, or leave all three blank.</string>
+    <string name="first_run_error_invalid_date">Invalid date format. Use YYYY-MM-DD or DD/MM/YYYY.</string>
+    <string name="first_run_error_date_range">The end date must be after the start date.</string>
+    <string name="first_run_error_semester_requires_year">A semester cannot be created without a complete academic year.</string>
+    <string name="first_run_error_semester_outside_year">Semester dates must be inside the academic year range.</string>
+    <string name="first_run_error_existing_database">Existing local data was found, so a new owner was not created to avoid conflicting with or overwriting that data.</string>
+    <string name="first_run_error_existing_no_admin">Existing data was found but there is no active Administrator that can be promoted. Restore a valid backup or clear app data only if you intend to start a new database.</string>
+    <string name="first_run_error_pin_storage">Setup was saved, but the PIN could not be enabled. You can configure it later in Settings.</string>
+    <string name="first_run_error_generic">Setup could not be completed. Check the entered data and try again.</string>
 </resources>

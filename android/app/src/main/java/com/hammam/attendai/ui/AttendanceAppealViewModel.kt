@@ -23,6 +23,7 @@ data class AppealUiState(
     val savedAppealId:String?=null,
 )
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class AttendanceAppealViewModel(app:Application,private val savedStateHandle:SavedStateHandle):AndroidViewModel(app){
     private val repository=(app as HammamAttendAiApplication).container.appeals
     private val getContext=GetAttendanceAppealContextUseCase(repository)

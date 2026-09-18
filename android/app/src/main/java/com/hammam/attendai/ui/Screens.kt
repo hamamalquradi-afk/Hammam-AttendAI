@@ -25,6 +25,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.BluetoothSearching
+import androidx.compose.material.icons.automirrored.filled.Rule
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -51,6 +54,7 @@ import com.hammam.attendai.ble.QrCodec
 import com.hammam.attendai.data.local.dao.AppealReviewRow
 import com.hammam.attendai.data.local.entity.*
 import com.hammam.attendai.domain.model.*
+import com.hammam.attendai.domain.setup.FirstRunSetup
 import java.util.Date
 
 data class DailyHomeUiState(
@@ -233,7 +237,7 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
 
 @Composable fun StudentHistoryScreen(student:StudentEntity,records:List<AttendanceRecordEntity>,onBack:()->Unit,onAppeal:(AttendanceRecordEntity)->Unit){
     Column(Modifier.fillMaxSize().padding(16.dp)){
-        Row(verticalAlignment=Alignment.CenterVertically){IconButton(onClick=onBack){Icon(Icons.Default.ArrowBack,null)};Column{Text(student.fullName,style=MaterialTheme.typography.headlineSmall);LtrText(student.universityNumber.orEmpty())}}
+        Row(verticalAlignment=Alignment.CenterVertically){IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Filled.ArrowBack,null)};Column{Text(student.fullName,style=MaterialTheme.typography.headlineSmall);LtrText(student.universityNumber.orEmpty())}}
         Spacer(Modifier.height(12.dp));Text(stringResource(R.string.attendance_history),style=MaterialTheme.typography.titleLarge)
         if(records.isEmpty())Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){Text(stringResource(R.string.no_attendance_records))}
         else LazyColumn(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(10.dp)){items(records,key={it.id}){r->Card{Column(Modifier.fillMaxWidth().padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
@@ -273,7 +277,7 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
         when{
             lecture==null->item{Button(onClick={startWithPermissions()},modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.PlayArrow,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.start_attendance))}}
             isActive->{
-                if(bleState !is DetectorState.Active)item{OutlinedButton(onClick=onResumeDetection,modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.BluetoothSearching,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.resume_detection))}}
+                if(bleState !is DetectorState.Active)item{OutlinedButton(onClick=onResumeDetection,modifier=Modifier.fillMaxWidth()){Icon(Icons.AutoMirrored.Filled.BluetoothSearching,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.resume_detection))}}
                 if(bleState is DetectorState.Error && bleState.code=="BLUETOOTH_DISABLED")item{OutlinedButton(onClick={bluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.enable_bluetooth))}}
                 item{OutlinedButton(onClick=onTakeOver,modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.take_over_attendance))}}
                 item{OutlinedButton(onClick={qrCamera.launch(null)},modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.QrCodeScanner,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.scan_dynamic_qr))}}
@@ -352,7 +356,7 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
         }
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
-        Row(verticalAlignment=Alignment.CenterVertically){IconButton(onClick=onBack){Icon(Icons.Default.ArrowBack,null)};Text(stringResource(R.string.attendance_appeal),style=MaterialTheme.typography.headlineSmall)}
+        Row(verticalAlignment=Alignment.CenterVertically){IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Filled.ArrowBack,null)};Text(stringResource(R.string.attendance_appeal),style=MaterialTheme.typography.headlineSmall)}
         if(state.loading){LinearProgressIndicator(Modifier.fillMaxWidth())}
         val c=state.context
         if(c==null){Text(state.message ?: stringResource(R.string.loading))}
@@ -383,7 +387,7 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
     var reviewingId by rememberSaveable{mutableStateOf<String?>(null)}; var accepting by rememberSaveable{mutableStateOf(true)}
     val reviewing=rows.firstOrNull{it.appealId==reviewingId}
     Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
-        Row(verticalAlignment=Alignment.CenterVertically){IconButton(onClick=onBack){Icon(Icons.Default.ArrowBack,null)};Text(stringResource(R.string.attendance_appeals),style=MaterialTheme.typography.headlineSmall)}
+        Row(verticalAlignment=Alignment.CenterVertically){IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Filled.ArrowBack,null)};Text(stringResource(R.string.attendance_appeals),style=MaterialTheme.typography.headlineSmall)}
         LazyRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){items(listOf(AppealStatus.PENDING,AppealStatus.ACCEPTED,AppealStatus.REJECTED)){status->FilterChip(selected=filter==status,onClick={onFilter(status)},label={Text(appealStatusLabel(status))})}}
         if(rows.isEmpty())Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){Text(stringResource(R.string.no_appeals))}
         else LazyColumn(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(10.dp)){items(rows,key={it.appealId}){row->Card{Column(Modifier.fillMaxWidth().padding(14.dp),verticalArrangement=Arrangement.spacedBy(5.dp)){
@@ -434,7 +438,7 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
         item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("SYSTEM" to R.string.theme_system,"LIGHT" to R.string.theme_light,"DARK" to R.string.theme_dark).forEach{(v,label)->FilterChip(selected=theme==v,onClick={onTheme(v)},label={Text(stringResource(label))})}}}
         if(canManageSettings)item{ChoiceDropdown(stringResource(R.string.academic_week_start),academicWeekStart,java.time.DayOfWeek.values().toList().map{it.name}){onAcademicWeekStart(it)}}
         if(canClaimOwnerSetup)item{ListItem(headlineContent={Text(stringResource(R.string.owner_upgrade_setup))},supportingContent={Text(stringResource(R.string.owner_upgrade_setup_note))},leadingContent={Icon(Icons.Default.Security,null)},trailingContent={Button(onClick={confirmOwnerSetup=true}){Text(stringResource(R.string.confirm))}})}
-        if(canReviewAppeals)item{ListItem(headlineContent={Text(stringResource(R.string.attendance_appeals))},supportingContent={Text(stringResource(R.string.appeal_review_desc))},leadingContent={Icon(Icons.Default.Rule,null)},trailingContent={Icon(Icons.Default.ChevronLeft,null)},modifier=Modifier.clickable(onClick=onOpenAppeals))}
+        if(canReviewAppeals)item{ListItem(headlineContent={Text(stringResource(R.string.attendance_appeals))},supportingContent={Text(stringResource(R.string.appeal_review_desc))},leadingContent={Icon(Icons.AutoMirrored.Filled.Rule,null)},trailingContent={Icon(Icons.Default.ChevronLeft,null)},modifier=Modifier.clickable(onClick=onOpenAppeals))}
         if(canOpenManagement)item{ListItem(headlineContent={Text(stringResource(R.string.management_tools))},supportingContent={Text(stringResource(R.string.management_tools_desc))},leadingContent={Icon(Icons.Default.AdminPanelSettings,null)},trailingContent={Icon(Icons.Default.ChevronLeft,null)},modifier=Modifier.clickable(onClick=onOpenManagement))}
         if(canUseAppLock){
             item{Text(stringResource(R.string.app_lock),style=MaterialTheme.typography.titleMedium)}
@@ -477,7 +481,7 @@ enum class AdminOpsSection{USERS,ACADEMIC,TEACHERS,SUBJECTS,TIMETABLE,REPORTS,AI
     }.ifEmpty{listOf(AdminOpsSection.DATA)}
     LaunchedEffect(available){if(section !in available)section=available.first()}
     Column(Modifier.fillMaxSize().safeDrawingPadding()){
-        Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically){IconButton(onClick=onBack){Icon(Icons.Default.ArrowBack,null)};Text(stringResource(R.string.management_tools),style=MaterialTheme.typography.titleLarge)}
+        Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically){IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Filled.ArrowBack,null)};Text(stringResource(R.string.management_tools),style=MaterialTheme.typography.titleLarge)}
         ScrollableTabRow(selectedTabIndex=available.indexOf(section).coerceAtLeast(0)){available.forEach{v->Tab(selected=section==v,onClick={section=v},text={Text(when(v){AdminOpsSection.USERS->stringResource(R.string.users_access);AdminOpsSection.ACADEMIC->stringResource(R.string.academic_structure);AdminOpsSection.TEACHERS->stringResource(R.string.teachers);AdminOpsSection.SUBJECTS->stringResource(R.string.subjects);AdminOpsSection.TIMETABLE->stringResource(R.string.timetable);AdminOpsSection.REPORTS->stringResource(R.string.report_settings);AdminOpsSection.AI->stringResource(R.string.ai_providers);AdminOpsSection.DATA->stringResource(R.string.local_data_tools)})})}}
         when(section){
             AdminOpsSection.USERS->UserAccessPane(permissions,adminVm)
@@ -657,32 +661,66 @@ enum class AdminOpsSection{USERS,ACADEMIC,TEACHERS,SUBJECTS,TIMETABLE,REPORTS,AI
 }
 
 
-data class FirstRunSetup(
-    val displayName:String,val language:String,val pin:String?,
-    val academicYearName:String,val academicYearStart:String,val academicYearEnd:String,
-    val semesterName:String,val semesterStart:String,val semesterEnd:String,
-)
+@Composable
+private fun firstRunErrorText(code:String):String = when(code){
+    "OWNER_NAME_REQUIRED" -> stringResource(R.string.first_run_error_owner_name)
+    "INVALID_PIN" -> stringResource(R.string.first_run_error_pin)
+    "ACADEMIC_YEAR_FIELDS_INCOMPLETE" -> stringResource(R.string.first_run_error_year_incomplete)
+    "SEMESTER_FIELDS_INCOMPLETE" -> stringResource(R.string.first_run_error_semester_incomplete)
+    "INVALID_DATE_FORMAT" -> stringResource(R.string.first_run_error_invalid_date)
+    "INVALID_DATE_RANGE" -> stringResource(R.string.first_run_error_date_range)
+    "SEMESTER_REQUIRES_ACADEMIC_YEAR" -> stringResource(R.string.first_run_error_semester_requires_year)
+    "SEMESTER_OUTSIDE_ACADEMIC_YEAR" -> stringResource(R.string.first_run_error_semester_outside_year)
+    "DATABASE_ALREADY_INITIALIZED" -> stringResource(R.string.first_run_error_existing_database)
+    "EXISTING_DATABASE_NO_ADMIN" -> stringResource(R.string.first_run_error_existing_no_admin)
+    "PIN_SETUP_FAILED" -> stringResource(R.string.first_run_error_pin_storage)
+    else -> stringResource(R.string.first_run_error_generic)
+}
 
-@Composable fun FirstRunScreen(onComplete:(FirstRunSetup)->Unit){
-    var displayName by rememberSaveable{mutableStateOf("")};var language by rememberSaveable{mutableStateOf("AR")};var pin by rememberSaveable{mutableStateOf("")}
-    var yearName by rememberSaveable{mutableStateOf("")};var yearStart by rememberSaveable{mutableStateOf("")};var yearEnd by rememberSaveable{mutableStateOf("")}
-    var semesterName by rememberSaveable{mutableStateOf("")};var semesterStart by rememberSaveable{mutableStateOf("")};var semesterEnd by rememberSaveable{mutableStateOf("")}
+@Composable fun FirstRunScreen(
+    onComplete:(FirstRunSetup)->Unit,
+    isSubmitting:Boolean=false,
+    errorMessage:String?=null,
+    recoveryAdminName:String?=null,
+    onRecoverExistingOwner:()->Unit={},
+){
+    var displayName by rememberSaveable{mutableStateOf("")}
+    var language by rememberSaveable{mutableStateOf("AR")}
+    var pin by rememberSaveable{mutableStateOf("")}
+    var yearName by rememberSaveable{mutableStateOf("")}
+    var yearStart by rememberSaveable{mutableStateOf("")}
+    var yearEnd by rememberSaveable{mutableStateOf("")}
+    var semesterName by rememberSaveable{mutableStateOf("")}
+    var semesterStart by rememberSaveable{mutableStateOf("")}
+    var semesterEnd by rememberSaveable{mutableStateOf("")}
+    val fieldStyle=MaterialTheme.typography.bodyLarge.copy(fontWeight=FontWeight.Medium)
+    val fieldColors=OutlinedTextFieldDefaults.colors(
+        focusedTextColor=MaterialTheme.colorScheme.onSurface,
+        unfocusedTextColor=MaterialTheme.colorScheme.onSurface,
+        focusedLabelColor=MaterialTheme.colorScheme.onSurface,
+        unfocusedLabelColor=MaterialTheme.colorScheme.onSurfaceVariant,
+        focusedSupportingTextColor=MaterialTheme.colorScheme.onSurfaceVariant,
+        unfocusedSupportingTextColor=MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     LazyColumn(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-        item{Text(stringResource(R.string.first_run_title),style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.SemiBold)}
-        item{Text(stringResource(R.string.first_run_owner_description))}
-        item{Text(stringResource(R.string.language),style=MaterialTheme.typography.titleMedium)}
-        item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){FilterChip(selected=language=="AR",onClick={language="AR"},label={Text(stringResource(R.string.language_arabic))});FilterChip(selected=language=="EN",onClick={language="EN"},label={Text(stringResource(R.string.language_english))})}}
-        item{OutlinedTextField(displayName,{displayName=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.system_owner_name))},supportingText={Text(stringResource(R.string.system_owner_protection_note))})}
-        item{OutlinedTextField(pin,{pin=it.filter(Char::isDigit).take(12)},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.pin_optional))},supportingText={Text(stringResource(R.string.pin_optional_note))},singleLine=true)}
-        item{HorizontalDivider();Text(stringResource(R.string.academic_setup_optional),style=MaterialTheme.typography.titleMedium)}
-        item{OutlinedTextField(yearName,{yearName=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.academic_year))})}
-        item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(yearStart,{yearStart=it},Modifier.weight(1f),label={Text(stringResource(R.string.start_date))});OutlinedTextField(yearEnd,{yearEnd=it},Modifier.weight(1f),label={Text(stringResource(R.string.end_date))})}}
-        item{OutlinedTextField(semesterName,{semesterName=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.semester))})}
-        item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(semesterStart,{semesterStart=it},Modifier.weight(1f),label={Text(stringResource(R.string.start_date))});OutlinedTextField(semesterEnd,{semesterEnd=it},Modifier.weight(1f),label={Text(stringResource(R.string.end_date))})}}
-        item{Text(stringResource(R.string.first_run_optional_note),style=MaterialTheme.typography.bodySmall)}
-        item{HorizontalDivider();Text(stringResource(R.string.device_readiness),style=MaterialTheme.typography.titleMedium)}
+        item{Text(stringResource(R.string.first_run_title),style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold)}
+        item{Text(stringResource(R.string.first_run_owner_description),style=MaterialTheme.typography.bodyLarge,fontWeight=FontWeight.Medium)}
+        errorMessage?.let{code->item{Card(colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.errorContainer)){Text(firstRunErrorText(code),Modifier.fillMaxWidth().padding(12.dp),color=MaterialTheme.colorScheme.onErrorContainer,fontWeight=FontWeight.Medium)}}}
+        recoveryAdminName?.let{name->item{Card{Column(Modifier.fillMaxWidth().padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text(stringResource(R.string.first_run_recovery_title),style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold);Text(stringResource(R.string.first_run_recovery_note,name),fontWeight=FontWeight.Medium);Button(onClick=onRecoverExistingOwner,enabled=!isSubmitting,modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.recover_existing_owner))}}}}
+        item{Text(stringResource(R.string.language),style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)}
+        item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){FilterChip(selected=language=="AR",onClick={language="AR"},enabled=!isSubmitting,label={Text(stringResource(R.string.language_arabic),fontWeight=FontWeight.Medium)});FilterChip(selected=language=="EN",onClick={language="EN"},enabled=!isSubmitting,label={Text(stringResource(R.string.language_english),fontWeight=FontWeight.Medium)})}}
+        item{OutlinedTextField(displayName,{displayName=it},Modifier.fillMaxWidth(),enabled=!isSubmitting,textStyle=fieldStyle,colors=fieldColors,label={Text(stringResource(R.string.system_owner_name),fontWeight=FontWeight.Medium)},supportingText={Text(stringResource(R.string.system_owner_protection_note),fontWeight=FontWeight.Medium)})}
+        item{OutlinedTextField(pin,{pin=it.filter(Char::isDigit).take(12)},Modifier.fillMaxWidth(),enabled=!isSubmitting,textStyle=fieldStyle,colors=fieldColors,label={Text(stringResource(R.string.pin_optional),fontWeight=FontWeight.Medium)},supportingText={Text(stringResource(R.string.pin_optional_note),fontWeight=FontWeight.Medium)},singleLine=true)}
+        item{HorizontalDivider();Text(stringResource(R.string.academic_setup_optional),style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)}
+        item{Text(stringResource(R.string.date_input_hint),style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.Medium,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+        item{OutlinedTextField(yearName,{yearName=it},Modifier.fillMaxWidth(),enabled=!isSubmitting,textStyle=fieldStyle,colors=fieldColors,label={Text(stringResource(R.string.academic_year),fontWeight=FontWeight.Medium)})}
+        item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(yearStart,{yearStart=it},Modifier.weight(1f),enabled=!isSubmitting,textStyle=fieldStyle,colors=fieldColors,label={Text(stringResource(R.string.start_date),fontWeight=FontWeight.Medium)});OutlinedTextField(yearEnd,{yearEnd=it},Modifier.weight(1f),enabled=!isSubmitting,textStyle=fieldStyle,colors=fieldColors,label={Text(stringResource(R.string.end_date),fontWeight=FontWeight.Medium)})}}
+        item{OutlinedTextField(semesterName,{semesterName=it},Modifier.fillMaxWidth(),enabled=!isSubmitting,textStyle=fieldStyle,colors=fieldColors,label={Text(stringResource(R.string.semester),fontWeight=FontWeight.Medium)})}
+        item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(semesterStart,{semesterStart=it},Modifier.weight(1f),enabled=!isSubmitting,textStyle=fieldStyle,colors=fieldColors,label={Text(stringResource(R.string.start_date),fontWeight=FontWeight.Medium)});OutlinedTextField(semesterEnd,{semesterEnd=it},Modifier.weight(1f),enabled=!isSubmitting,textStyle=fieldStyle,colors=fieldColors,label={Text(stringResource(R.string.end_date),fontWeight=FontWeight.Medium)})}}
+        item{Text(stringResource(R.string.first_run_optional_note),style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.Medium)}
+        item{HorizontalDivider();Text(stringResource(R.string.device_readiness),style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)}
         item{DeviceReadinessCard(DashboardState())}
-        item{Button(onClick={onComplete(FirstRunSetup(displayName,language,pin.takeIf{it.isNotBlank()},yearName,yearStart,yearEnd,semesterName,semesterStart,semesterEnd))},enabled=displayName.isNotBlank()&&(pin.isBlank()||pin.length in 4..12),modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.finish_setup))}}
+        item{Button(onClick={onComplete(FirstRunSetup(displayName,language,pin.takeIf{it.isNotBlank()},yearName,yearStart,yearEnd,semesterName,semesterStart,semesterEnd))},enabled=!isSubmitting&&displayName.isNotBlank()&&(pin.isBlank()||pin.length in 4..12),modifier=Modifier.fillMaxWidth()){if(isSubmitting){CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp);Spacer(Modifier.width(8.dp));Text(stringResource(R.string.setup_in_progress))}else Text(stringResource(R.string.finish_setup))}}
     }
 }
 
