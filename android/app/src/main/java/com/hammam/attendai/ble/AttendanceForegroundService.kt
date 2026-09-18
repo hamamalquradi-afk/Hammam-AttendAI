@@ -31,7 +31,16 @@ class AttendanceForegroundService:Service(){
             stopSelf();return START_NOT_STICKY
         }
         sessionJob?.cancel()
-        sessionJob=scope.launch{runAttendanceLoop(restored=intent==null || intent.getBooleanExtra(EXTRA_RESTORED,false))}
+        sessionJob=scope.launch{
+            try{runAttendanceLoop(restored=intent==null || intent.getBooleanExtra(EXTRA_RESTORED,false))}
+            catch(e:CancellationException){throw e}
+            catch(e:Exception){
+                android.util.Log.e("AttendanceForegroundService","ATTENDANCE_LOOP_FAILED",e)
+                runCatching{(application as HammamAttendAiApplication).container.attendance.markDetectorIssue(e.message?.takeIf{it.isNotBlank()}?:"BLE_RUNTIME_FAILED")}
+                runCatching{(application as HammamAttendAiApplication).container.bleDetector.stop()}
+                stopSelf()
+            }
+        }
         return START_STICKY
     }
 

@@ -2,6 +2,7 @@ package com.hammam.attendai.ui
 
 import android.app.Application
 import android.content.Intent
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.core.content.ContextCompat
@@ -234,31 +235,37 @@ class MainViewModel(app:Application,private val savedStateHandle:SavedStateHandl
     }}
     fun selectStudent(id:String?){savedStateHandle["selectedStudentId"]=id}
 
-    fun setBackendBaseUrl(url:String){viewModelScope.launch{container.preferences.setBackendBaseUrl(url.ifBlank{null});_message.value="BACKEND_URL_UPDATED";refreshSystemHealth()}}
-    fun setBackendAuthToken(token:String){viewModelScope.launch{
+    private fun runtimeSafeLaunch(failureCode:String, action:suspend()->Unit)=viewModelScope.launch{
+        try{ action() }
+        catch(e:kotlinx.coroutines.CancellationException){ throw e }
+        catch(e:Exception){ Log.e("MainViewModel",failureCode,e);_message.value=e.message?.takeIf{it.isNotBlank()}?:failureCode }
+    }
+
+    fun setBackendBaseUrl(url:String){runtimeSafeLaunch("BACKEND_URL_UPDATE_FAILED") {container.preferences.setBackendBaseUrl(url.ifBlank{null});_message.value="BACKEND_URL_UPDATED";refreshSystemHealth()}}
+    fun setBackendAuthToken(token:String){runtimeSafeLaunch("BACKEND_AUTH_UPDATE_FAILED") safe@{
         val actor=currentUserId.value
-        if(!container.authorization.hasPermission(actor,"MANAGE_SETTINGS")){_message.value="MANAGE_SETTINGS_PERMISSION_REQUIRED";return@launch}
+        if(!container.authorization.hasPermission(actor,"MANAGE_SETTINGS")){_message.value="MANAGE_SETTINGS_PERMISSION_REQUIRED";return@safe}
         container.secretStore.put("backend.auth.token",token.ifBlank{null});_backendAuthMasked.value=container.secretStore.maskedSuffix("backend.auth.token");_message.value="BACKEND_AUTH_UPDATED";refreshSystemHealth()
     }}
     fun deleteBackendAuthToken(){setBackendAuthToken("")}
-    fun setTheme(mode:String){viewModelScope.launch{require(mode in setOf("SYSTEM","LIGHT","DARK"));container.preferences.setTheme(mode);_message.value="THEME_UPDATED"}}
-    fun setLanguage(language:String){viewModelScope.launch{require(language in setOf("AR","EN"));container.preferences.setLanguage(language);_message.value="LANGUAGE_UPDATED"}}
-    fun setAcademicWeekStart(day:String){viewModelScope.launch{if(!container.authorization.hasPermission(currentUserId.value,"MANAGE_SETTINGS")){_message.value="MANAGE_SETTINGS_PERMISSION_REQUIRED";return@launch};container.preferences.setAcademicWeekStart(day);_message.value="ACADEMIC_WEEK_START_UPDATED"}}
+    fun setTheme(mode:String){runtimeSafeLaunch("THEME_UPDATE_FAILED") {require(mode in setOf("SYSTEM","LIGHT","DARK"));container.preferences.setTheme(mode);_message.value="THEME_UPDATED"}}
+    fun setLanguage(language:String){runtimeSafeLaunch("LANGUAGE_UPDATE_FAILED") {require(language in setOf("AR","EN"));container.preferences.setLanguage(language);_message.value="LANGUAGE_UPDATED"}}
+    fun setAcademicWeekStart(day:String){runtimeSafeLaunch("ACADEMIC_WEEK_START_UPDATE_FAILED") safe@{if(!container.authorization.hasPermission(currentUserId.value,"MANAGE_SETTINGS")){_message.value="MANAGE_SETTINGS_PERMISSION_REQUIRED";return@safe};container.preferences.setAcademicWeekStart(day);_message.value="ACADEMIC_WEEK_START_UPDATED"}}
     fun claimUpgradeSystemOwner(){viewModelScope.launch{val actor=currentUserId.value?:return@launch;runCatching{container.authorization.claimUpgradeSystemOwner(actor);container.preferences.setOwnerSetupRequired(false);container.preferences.setLocalRole("SYSTEM_OWNER")}.onSuccess{_message.value="SYSTEM_OWNER_SETUP_COMPLETE"}.onFailure{_message.value=it.message?:"SYSTEM_OWNER_SETUP_FAILED"}}}
-    fun setFeatureFlag(code:String,enabled:Boolean){viewModelScope.launch{
+    fun setFeatureFlag(code:String,enabled:Boolean){runtimeSafeLaunch("FEATURE_FLAG_UPDATE_FAILED") safe@{
         val actor=currentUserId.value
-        if(!container.authorization.hasPermission(actor,"MANAGE_SETTINGS")){_message.value="MANAGE_SETTINGS_PERMISSION_REQUIRED";return@launch}
+        if(!container.authorization.hasPermission(actor,"MANAGE_SETTINGS")){_message.value="MANAGE_SETTINGS_PERMISSION_REQUIRED";return@safe}
         container.featureFlags.set(code,enabled);_message.value="FEATURE_FLAG_UPDATED";refreshSystemHealth()
     }}
     fun clearMessage(){_message.value=null}
     fun unlockWithPin(pin:String){if(container.appLock.verify(pin.toCharArray())){_appUnlocked.value=true;_message.value=null}else _message.value="APP_LOCK_INVALID_PIN"}
     fun unlockWithBiometric(){if(container.appLock.biometricEnabled())_appUnlocked.value=true}
-    fun configureAppLockPin(pin:String){viewModelScope.launch{val role=currentRole.value;require(role in setOf("SYSTEM_OWNER","System Owner","Administrator","Representative")){"APP_LOCK_ROLE_NOT_ALLOWED"};container.appLock.setPin(pin.toCharArray());_appLockConfigured.value=true;_appUnlocked.value=true;_message.value="APP_LOCK_PIN_UPDATED"}}
-    fun disableAppLock(){viewModelScope.launch{container.appLock.clear();_appLockConfigured.value=false;_biometricEnabled.value=false;_appUnlocked.value=true;_message.value="APP_LOCK_DISABLED"}}
-    fun setBiometricAppLock(enabled:Boolean){viewModelScope.launch{container.appLock.setBiometric(enabled);_biometricEnabled.value=enabled;_message.value="APP_LOCK_BIOMETRIC_UPDATED"}}
+    fun configureAppLockPin(pin:String){runtimeSafeLaunch("APP_LOCK_PIN_UPDATE_FAILED") {val role=currentRole.value;require(role in setOf("SYSTEM_OWNER","System Owner","Administrator","Representative")){"APP_LOCK_ROLE_NOT_ALLOWED"};container.appLock.setPin(pin.toCharArray());_appLockConfigured.value=true;_appUnlocked.value=true;_message.value="APP_LOCK_PIN_UPDATED"}}
+    fun disableAppLock(){runtimeSafeLaunch("APP_LOCK_DISABLE_FAILED") {container.appLock.clear();_appLockConfigured.value=false;_biometricEnabled.value=false;_appUnlocked.value=true;_message.value="APP_LOCK_DISABLED"}}
+    fun setBiometricAppLock(enabled:Boolean){runtimeSafeLaunch("APP_LOCK_BIOMETRIC_UPDATE_FAILED") {container.appLock.setBiometric(enabled);_biometricEnabled.value=enabled;_message.value="APP_LOCK_BIOMETRIC_UPDATED"}}
 
-    fun takeOverAttendance(){viewModelScope.launch{
-        val actor=currentUserId.value?:return@launch
+    fun takeOverAttendance(){runtimeSafeLaunch("ATTENDANCE_TAKEOVER_FAILED") safe@{
+        val actor=currentUserId.value?:return@safe
         _message.value=when(val r=container.attendance.takeOverActiveLecture(actor,"Manual host takeover")){is LectureActionResult.Success->"ATTENDANCE_HOST_TAKEN_OVER";is LectureActionResult.Failure->r.reason}
     }}
     fun verifyDynamicQr(payload:String){viewModelScope.launch{
@@ -267,9 +274,9 @@ class MainViewModel(app:Application,private val savedStateHandle:SavedStateHandl
         val ok=container.attendance.recordQrVerification(session.id,resolved.studentId,actor);_message.value=if(ok)"QR_ATTENDANCE_VERIFIED" else "QR_ATTENDANCE_REJECTED"
     }}
 
-    fun startAttendance(){viewModelScope.launch{
+    fun startAttendance(){runtimeSafeLaunch("ATTENDANCE_START_FAILED") safe@{
         val actor=currentUserId.value
-        if(!container.authorization.hasPermission(actor,"START_LECTURE")){_message.value="START_LECTURE_PERMISSION_REQUIRED";return@launch}
+        if(!container.authorization.hasPermission(actor,"START_LECTURE")){_message.value="START_LECTURE_PERMISSION_REQUIRED";return@safe}
         _message.value=when(val r=container.attendance.startNextLecture(actor!!)){
             is LectureActionResult.Success->{
                 val bleStarted=runCatching{ContextCompat.startForegroundService(application,Intent(application,AttendanceForegroundService::class.java))}.isSuccess
@@ -278,9 +285,9 @@ class MainViewModel(app:Application,private val savedStateHandle:SavedStateHandl
             is LectureActionResult.Failure->r.reason
         }
     }}
-    fun endAttendance(){viewModelScope.launch{
+    fun endAttendance(){runtimeSafeLaunch("ATTENDANCE_END_FAILED") safe@{
         val actor=currentUserId.value
-        if(!container.authorization.hasPermission(actor,"END_LECTURE")){_message.value="END_LECTURE_PERMISSION_REQUIRED";return@launch}
+        if(!container.authorization.hasPermission(actor,"END_LECTURE")){_message.value="END_LECTURE_PERMISSION_REQUIRED";return@safe}
         _message.value=when(val r=container.attendance.endActiveLecture(actor!!)){
             is LectureActionResult.Success->{application.stopService(Intent(application,AttendanceForegroundService::class.java));"LECTURE_ENDED_NEEDS_REVIEW"}
             is LectureActionResult.Failure->r.reason
@@ -315,19 +322,19 @@ class MainViewModel(app:Application,private val savedStateHandle:SavedStateHandl
         runCatching{ContextCompat.startForegroundService(application,Intent(application,AttendanceForegroundService::class.java).putExtra(AttendanceForegroundService.EXTRA_RESTORED,true))}
             .onSuccess{_message.value="ATTENDANCE_DETECTION_RESUMED"}.onFailure{container.attendance.markDetectorIssue("FOREGROUND_SERVICE_START_FAILED");_message.value="BLE_SERVICE_START_FAILED"}
     }}
-    fun generateCurrentReport(){viewModelScope.launch{
+    fun generateCurrentReport(){runtimeSafeLaunch("REPORT_GENERATION_FAILED") safe@{
         val actor=currentUserId.value
-        if(!container.authorization.hasPermission(actor,"SEND_REPORTS")){_message.value="SEND_REPORTS_PERMISSION_REQUIRED";return@launch}
+        if(!container.authorization.hasPermission(actor,"SEND_REPORTS")){_message.value="SEND_REPORTS_PERMISSION_REQUIRED";return@safe}
         val lecture=dashboard.value.activeLecture ?: actor?.let{dao.getNextLectureForUser(it)}
-        if(lecture==null){_message.value="NO_LECTURE_FOR_REPORT";return@launch}
+        if(lecture==null){_message.value="NO_LECTURE_FOR_REPORT";return@safe}
         val queued=container.reports.enqueueForLecture(lecture)
         _message.value=if(queued)"REPORT_QUEUED" else "REPORT_ALREADY_QUEUED"
         if(queued) WorkOrchestrator.kickReports(application)
     }}
-    fun approveReport(jobId:String){viewModelScope.launch{
+    fun approveReport(jobId:String){runtimeSafeLaunch("REPORT_APPROVAL_FAILED") safe@{
         val actor=currentUserId.value
-        if(!container.authorization.hasPermission(actor,"APPROVE_REPORT")){_message.value="APPROVE_REPORT_PERMISSION_REQUIRED";return@launch}
-        if(!container.authorization.canAccessReportJob(actor,jobId)){_message.value="REPORT_SCOPE_PERMISSION_REQUIRED";return@launch}
+        if(!container.authorization.hasPermission(actor,"APPROVE_REPORT")){_message.value="APPROVE_REPORT_PERMISSION_REQUIRED";return@safe}
+        if(!container.authorization.canAccessReportJob(actor,jobId)){_message.value="REPORT_SCOPE_PERMISSION_REQUIRED";return@safe}
         val ok=container.reports.approve(jobId,actor!!);_message.value=if(ok)"REPORT_APPROVED" else "REPORT_APPROVAL_NOT_AVAILABLE";if(ok)WorkOrchestrator.kickReports(application)
     }}
     fun loadReportPreview(jobId:String){viewModelScope.launch{val actor=currentUserId.value;if(!container.authorization.canAccessReportJob(actor,jobId)){_message.value="REPORT_SCOPE_PERMISSION_REQUIRED";return@launch};_reportPreview.value=container.reports.generated(jobId);if(_reportPreview.value==null)_message.value="REPORT_NOT_GENERATED_YET"}}
@@ -335,10 +342,10 @@ class MainViewModel(app:Application,private val savedStateHandle:SavedStateHandl
     fun cancelReport(jobId:String){viewModelScope.launch{val actor=currentUserId.value;if(!container.authorization.hasPermission(actor,"APPROVE_REPORT")){_message.value="APPROVE_REPORT_PERMISSION_REQUIRED";return@launch};if(!container.authorization.canAccessReportJob(actor,jobId)){_message.value="REPORT_SCOPE_PERMISSION_REQUIRED";return@launch};_message.value=if(container.reports.cancel(jobId,actor!!))"REPORT_CANCELLED" else "REPORT_CANCEL_NOT_AVAILABLE"}}
     fun regenerateReport(jobId:String){viewModelScope.launch{val actor=currentUserId.value;if(!container.authorization.hasPermission(actor,"APPROVE_REPORT")){_message.value="APPROVE_REPORT_PERMISSION_REQUIRED";return@launch};if(!container.authorization.canAccessReportJob(actor,jobId)){_message.value="REPORT_SCOPE_PERMISSION_REQUIRED";return@launch};val ok=container.reports.regenerate(jobId,actor!!);_message.value=if(ok)"REPORT_REGENERATE_QUEUED" else "REPORT_REGENERATE_NOT_AVAILABLE";if(ok)WorkOrchestrator.kickReports(application)}}
 
-    fun retryReport(jobId:String){viewModelScope.launch{
+    fun retryReport(jobId:String){runtimeSafeLaunch("REPORT_RETRY_FAILED") safe@{
         val actor=currentUserId.value
-        if(!container.authorization.hasPermission(actor,"SEND_REPORTS")){_message.value="SEND_REPORTS_PERMISSION_REQUIRED";return@launch}
-        if(!container.authorization.canAccessReportJob(actor,jobId)){_message.value="REPORT_SCOPE_PERMISSION_REQUIRED";return@launch}
+        if(!container.authorization.hasPermission(actor,"SEND_REPORTS")){_message.value="SEND_REPORTS_PERMISSION_REQUIRED";return@safe}
+        if(!container.authorization.canAccessReportJob(actor,jobId)){_message.value="REPORT_SCOPE_PERMISSION_REQUIRED";return@safe}
         val ok=container.reports.retry(jobId,actor!!);_message.value=if(ok)"REPORT_RETRY_QUEUED" else "REPORT_RETRY_NOT_AVAILABLE";if(ok)WorkOrchestrator.kickReports(application)
     }}
 

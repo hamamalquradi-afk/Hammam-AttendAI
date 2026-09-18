@@ -2,6 +2,7 @@ package com.hammam.attendai.ui
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.core.content.FileProvider
 import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
@@ -77,7 +78,7 @@ class AdminOperationsViewModel(app:Application):AndroidViewModel(app){
 
     fun clearMessage(){_message.value=null}
     private suspend fun loadAiState(){_providerHealth.value=AiProviderNames.all.map{container.aiProviderManager.health(it)};_defaultAiProvider.value=container.aiProviderManager.defaultProvider();_reportModelAssignment.value=container.aiProviderManager.assignment("report");_complexModelAssignment.value=container.aiProviderManager.assignment("complex")}
-    private fun aiAction(action:suspend(String)->Unit)=viewModelScope.launch{runCatching{val uid=actor();require(container.authorization.hasPermission(uid,"MANAGE_AI_PROVIDER")){"MANAGE_AI_PROVIDER_PERMISSION_REQUIRED"};action(uid);loadAiState()}.onFailure{_message.value=it.message?:"AI_PROVIDER_OPERATION_FAILED"}}
+    private fun aiAction(action:suspend(String)->Unit)=viewModelScope.launch{try{val uid=actor();require(container.authorization.hasPermission(uid,"MANAGE_AI_PROVIDER")){"MANAGE_AI_PROVIDER_PERMISSION_REQUIRED"};action(uid);loadAiState()}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(e:Exception){Log.e("AdminOperationsViewModel","AI_PROVIDER_OPERATION_FAILED",e);_message.value=e.message?:"AI_PROVIDER_OPERATION_FAILED"}}
     fun setAiMode(provider:String,mode:AiKeyMode)=aiAction{container.aiProviderManager.setMode(provider,mode);_message.value="AI_PROVIDER_MODE_UPDATED"}
     fun setAiKey(provider:String,key:String)=aiAction{container.aiProviderManager.setKey(provider,key.ifBlank{null});_message.value="AI_PROVIDER_KEY_UPDATED"}
     fun deleteAiKey(provider:String)=aiAction{container.aiProviderManager.setKey(provider,null);_message.value="AI_PROVIDER_KEY_REMOVED"}
@@ -98,7 +99,7 @@ class AdminOperationsViewModel(app:Application):AndroidViewModel(app){
     fun rejectDeviceReplacement(requestId:String,note:String)=launch{uid->require(note.isNotBlank()){"REASON_REQUIRED"};container.devices.rejectReplacement(requestId,uid,note);_message.value="DEVICE_REPLACEMENT_REJECTED"}
 
     private suspend fun actor():String=preferences.userId.first()?:error("USER_NOT_INITIALIZED")
-    private fun launch(action:suspend(String)->Unit)=viewModelScope.launch{runCatching{action(actor())}.onFailure{_message.value=it.message?:"OPERATION_FAILED"}}
+    private fun launch(action:suspend(String)->Unit)=viewModelScope.launch{try{action(actor())}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(e:Exception){Log.e("AdminOperationsViewModel","OPERATION_FAILED",e);_message.value=e.message?:"OPERATION_FAILED"}}
 
     fun addUniversity(name:String)=launch{repo.addUniversity(name,it);_message.value="UNIVERSITY_CREATED"}
     fun addFaculty(universityId:String,name:String)=launch{repo.addFaculty(universityId,name,it);_message.value="FACULTY_CREATED"}

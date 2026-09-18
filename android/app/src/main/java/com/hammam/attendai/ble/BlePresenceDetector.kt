@@ -50,6 +50,9 @@ class BlePresenceDetector(private val context:Context):PresenceDetector {
             callback=null;scanner=null;_state.value=DetectorState.Error("PERMISSION_REVOKED")
         }catch(_:IllegalStateException){
             callback=null;scanner=null;_state.value=DetectorState.Error("SCANNER_STATE_ERROR")
+        }catch(e:Exception){
+            runCatching{callback?.let{scanner?.stopScan(it)}}
+            callback=null;scanner=null;_state.value=DetectorState.Error(e.message?.takeIf{it.isNotBlank()}?:"SCANNER_RUNTIME_ERROR")
         }
     }
     @SuppressLint("MissingPermission")

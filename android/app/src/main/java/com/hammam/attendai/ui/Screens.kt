@@ -319,13 +319,24 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
 @Composable fun ReportsScreen(history:List<ReportJobEntity>,preview:GeneratedReportEntity?,onGenerate:()->Unit,onApprove:(String)->Unit,onRetry:(String)->Unit,onPreview:(String)->Unit,onClosePreview:()->Unit,onCancel:(String)->Unit,onRegenerate:(String)->Unit){
     val context=LocalContext.current
     fun openGenerated(row:GeneratedReportEntity,share:Boolean){
-        val file=java.io.File(row.filePath);if(!file.exists())return
-        val uri=FileProvider.getUriForFile(context,"${context.packageName}.files",file)
-        val mime=when(row.format.uppercase()){ "PDF"->"application/pdf";"CSV"->"text/csv";else->"text/plain" }
-        val action=if(share)Intent.ACTION_SEND else Intent.ACTION_VIEW
-        val i=Intent(action).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        if(share)i.setType(mime).putExtra(Intent.EXTRA_STREAM,uri) else i.setDataAndType(uri,mime)
-        runCatching{context.startActivity(if(share)Intent.createChooser(i,context.getString(R.string.share_report)) else i)}
+        try{
+            val file=java.io.File(row.filePath)
+            if(!file.isFile)throw java.io.FileNotFoundException("REPORT_FILE_NOT_FOUND")
+            val uri=FileProvider.getUriForFile(context,"${context.packageName}.files",file)
+            val mime=when(row.format.uppercase()){ "PDF"->"application/pdf";"CSV"->"text/csv";else->"text/plain" }
+            val action=if(share)Intent.ACTION_SEND else Intent.ACTION_VIEW
+            val i=Intent(action).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if(share)i.setType(mime).putExtra(Intent.EXTRA_STREAM,uri) else i.setDataAndType(uri,mime)
+            context.startActivity(if(share)Intent.createChooser(i,context.getString(R.string.share_report)) else i)
+        }catch(e:android.content.ActivityNotFoundException){
+            android.widget.Toast.makeText(context,"NO_APP_AVAILABLE_FOR_REPORT",android.widget.Toast.LENGTH_LONG).show()
+        }catch(e:SecurityException){
+            android.util.Log.e("ReportsScreen","REPORT_FILE_ACCESS_DENIED",e);android.widget.Toast.makeText(context,"REPORT_FILE_ACCESS_DENIED",android.widget.Toast.LENGTH_LONG).show()
+        }catch(e:IllegalArgumentException){
+            android.util.Log.e("ReportsScreen","REPORT_FILE_URI_INVALID",e);android.widget.Toast.makeText(context,"REPORT_FILE_URI_INVALID",android.widget.Toast.LENGTH_LONG).show()
+        }catch(e:java.io.FileNotFoundException){
+            android.widget.Toast.makeText(context,e.message?:"REPORT_FILE_NOT_FOUND",android.widget.Toast.LENGTH_LONG).show()
+        }
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
         item{Text(stringResource(R.string.reports),style=MaterialTheme.typography.headlineMedium)}

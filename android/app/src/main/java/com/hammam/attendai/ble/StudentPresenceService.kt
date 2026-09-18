@@ -92,6 +92,10 @@ class StudentPresenceService:Service(){
                 _active.value=true
                 delay(20_000)
             }
+        }catch(e:kotlinx.coroutines.CancellationException){throw e
+        }catch(e:Exception){
+            android.util.Log.e("StudentPresenceService","PRESENCE_LOOP_FAILED",e)
+            reportError(e.message?.takeIf{it.isNotBlank()}?:"PRESENCE_RUNTIME_FAILED")
         }finally{
             advertiser.stop();_active.value=false
             ServiceCompat.stopForeground(this,ServiceCompat.STOP_FOREGROUND_REMOVE)
