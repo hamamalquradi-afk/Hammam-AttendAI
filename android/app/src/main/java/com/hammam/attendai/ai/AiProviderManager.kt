@@ -70,7 +70,7 @@ class AiProviderManager(
     }
 
     private suspend fun listViaBackend(provider:String):List<String>{val payload="{\"provider\":\"$provider\"}";val r=backend.post("/api/v1/ai/providers/models",payload,"models:$provider:${System.currentTimeMillis()/300000}");if(!r.ok)error(r.error?:"MODEL_REFRESH_FAILED");return parseArrayField(r.responseBody.orEmpty(),"models")}
-    private suspend fun listDirect(provider:String,key:String):List<String>=when(provider){
+    private suspend fun listDirect(provider:String,key:String):List<String> = when(provider){
         AiProviderNames.OPENAI->{val r=http.request("GET","https://api.openai.com/v1/models",mapOf("Authorization" to "Bearer $key"));if(!r.ok)error("OPENAI_HTTP_${r.code}");parseObjectIds(r.body,"id").filter(::textModelCandidate)}
         AiProviderNames.GEMINI->{val r=http.request("GET","https://generativelanguage.googleapis.com/v1beta/models",mapOf("x-goog-api-key" to key));if(!r.ok)error("GEMINI_HTTP_${r.code}");parseGeminiModels(r.body)}
         AiProviderNames.CLAUDE->{val r=http.request("GET","https://api.anthropic.com/v1/models",mapOf("x-api-key" to key,"anthropic-version" to "2023-06-01"));if(!r.ok)error("CLAUDE_HTTP_${r.code}");parseObjectIds(r.body,"id")}

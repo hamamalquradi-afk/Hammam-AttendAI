@@ -7,7 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import java.util.Locale
 
-@Composable fun HammamTheme(mode:String="SYSTEM",content:@Composable()->Unit){
+@Composable fun HammamTheme(mode:String="SYSTEM", content: @Composable () -> Unit){
     val dark=when(mode.uppercase()){ "DARK"->true;"LIGHT"->false;else->isSystemInDarkTheme() }
     MaterialTheme(colorScheme=if(dark)darkColorScheme() else lightColorScheme(),content=content)
 }
