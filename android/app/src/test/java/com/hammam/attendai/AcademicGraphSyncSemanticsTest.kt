@@ -32,7 +32,9 @@ class AcademicGraphSyncSemanticsTest {
             assertNotNull(type,SyncIntegrityRules.queuedPayloadMetadata(type,payload,id))
             val extra=JSONObject(payload.toString()).put("unexpected",true);assertNull("extra $type",SyncIntegrityRules.queuedPayloadMetadata(type,extra,id))
             val wrongId=JSONObject(payload.toString()).put("id","wrong");assertNull("id $type",SyncIntegrityRules.queuedPayloadMetadata(type,wrongId,id))
-            val wrongVersion=JSONObject(payload.toString()).put("version",2L);assertNull("version $type",SyncIntegrityRules.queuedPayloadMetadata(type,wrongVersion,id))
+            val invalidVersion=JSONObject(payload.toString()).put("version",0L);assertNull("invalid version $type",SyncIntegrityRules.queuedPayloadMetadata(type,invalidVersion,id))
+            val mismatchedEnvelope=change(1,type,id,payload).put("entityVersion",2L)
+            assertEquals("envelope version mismatch $type","SYNC_PULL_MALFORMED_CHANGE",SyncIntegrityRules.validatePullBatch(0,1,false,listOf(mismatchedEnvelope),"workspace-source"))
             val wrongTime=JSONObject(payload.toString()).put("updatedAt",0L);assertNull("time $type",SyncIntegrityRules.queuedPayloadMetadata(type,wrongTime,id))
         }
     }
