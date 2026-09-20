@@ -12,6 +12,7 @@ class DataIntegrityRepository(private val db:HammamDatabase){
         fun add(code:String,count:Int,action:String){if(count>0)issues+=Issue(code,count,action)}
         add("STUDENT_INVALID_ACADEMIC_SCOPE",dao.countStudentsWithInvalidScope(),"Review student level/batch/section/group assignments")
         add("SUBJECT_WITHOUT_TEACHER",dao.countSubjectsWithoutTeacher(),"Assign a teacher or archive the subject")
+        add("SUBJECT_INVALID_ATTENDANCE_POLICY",dao.countSubjectsWithInvalidAttendancePolicy(),"Assign an existing attendance policy to the subject")
         add("SUBJECT_INVALID_TEACHER",dao.countSubjectsWithInvalidTeacher(),"Assign an active teacher")
         add("BROKEN_TEACHER_SUBJECT_RELATION",dao.countBrokenTeacherSubjectRelations(),"Review teacher-subject links")
         add("TIMETABLE_ARCHIVED_SUBJECT",dao.countTimetablesUsingArchivedSubject(),"Review or archive affected timetable rows")

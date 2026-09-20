@@ -8,6 +8,7 @@ import com.hammam.attendai.ble.RotatingPresenceToken
 import com.hammam.attendai.data.local.HammamDatabase
 import com.hammam.attendai.data.local.entity.*
 import com.hammam.attendai.domain.model.DeviceStatus
+import com.hammam.attendai.domain.model.StudentStatus
 import com.hammam.attendai.security.AuthorizationRepository
 import com.hammam.attendai.security.KeystoreCipher
 import java.security.KeyPairGenerator
@@ -25,6 +26,7 @@ class DeviceEnrollmentRepository(private val db:HammamDatabase,private val ciphe
 
     suspend fun enroll(studentId:String,actorId:String):StudentDeviceEntity=db.withTransaction{
         val student=dao.getStudentById(studentId)?:error("STUDENT_NOT_FOUND")
+        check(student.status==StudentStatus.ACTIVE){"STUDENT_NOT_ACTIVE"}
         if(authorization!=null && !authorization.canAccessStudent(actorId,studentId))error("STUDENT_SCOPE_REQUIRED")
         check(dao.getActiveDevicesForStudent(studentId).isEmpty()){"REPLACEMENT_APPROVAL_REQUIRED"}
         val pending=createIdentity(studentId)
@@ -37,6 +39,7 @@ class DeviceEnrollmentRepository(private val db:HammamDatabase,private val ciphe
 
     suspend fun requestReplacement(studentId:String,actorId:String):DeviceReplacementRequestEntity=db.withTransaction{
         val student=dao.getStudentById(studentId)?:error("STUDENT_NOT_FOUND")
+        check(student.status==StudentStatus.ACTIVE){"STUDENT_NOT_ACTIVE"}
         if(authorization!=null && !authorization.canAccessStudent(actorId,studentId))error("STUDENT_SCOPE_REQUIRED")
         check(dao.getActiveDevicesForStudent(studentId).isNotEmpty()){"ACTIVE_DEVICE_REQUIRED"}
         dao.getPendingDeviceReplacementRequestForStudent(studentId)?.let{return@withTransaction it}
@@ -51,7 +54,7 @@ class DeviceEnrollmentRepository(private val db:HammamDatabase,private val ciphe
         val request=dao.getDeviceReplacementRequest(requestId)?:error("REQUEST_NOT_FOUND")
         check(request.status=="PENDING"){"REQUEST_ALREADY_REVIEWED"}
         if(authorization!=null && !authorization.hasScopedPermission(reviewerId,"MANAGE_DEVICE_ENROLLMENT","STUDENT",request.studentId))error("DEVICE_ENROLLMENT_PERMISSION_REQUIRED")
-        val student=dao.getStudentById(request.studentId)?:error("STUDENT_NOT_FOUND");val now=System.currentTimeMillis()
+        val student=dao.getStudentById(request.studentId)?:error("STUDENT_NOT_FOUND");check(student.status==StudentStatus.ACTIVE){"STUDENT_NOT_ACTIVE"};val now=System.currentTimeMillis()
         dao.getActiveDevicesForStudent(student.id).forEach{old->dao.updateStudentDevice(old.copy(status=DeviceStatus.REPLACED,version=old.version+1))}
         val device=StudentDeviceEntity(UUID.randomUUID().toString(),student.id,request.newDevicePublicId,request.newPublicKey,request.newPresenceSecretCiphertext,now,null,DeviceStatus.ACTIVE,1)
         dao.insertStudentDevice(device);dao.updateStudent(student.copy(registeredDeviceId=device.id,updatedAt=now,version=student.version+1))
@@ -71,7 +74,8 @@ class DeviceEnrollmentRepository(private val db:HammamDatabase,private val ciphe
     private data class PairingState(val status:String,val studentId:String,val publicId:String,val expiresAt:Long)
 
     suspend fun createPairingOffer(studentId:String,actorId:String,ttlMillis:Long=5*60_000L):PairingOffer=db.withTransaction{
-        dao.getStudentById(studentId)?:error("STUDENT_NOT_FOUND")
+        val student=dao.getStudentById(studentId)?:error("STUDENT_NOT_FOUND")
+        check(student.status==StudentStatus.ACTIVE){"STUDENT_NOT_ACTIVE"}
         if(authorization!=null && !authorization.canAccessStudent(actorId,studentId))error("STUDENT_SCOPE_REQUIRED")
         check(dao.getActiveDevicesForStudent(studentId).isEmpty()){"REPLACEMENT_APPROVAL_REQUIRED"}
         val identity=createIdentity(studentId);val now=System.currentTimeMillis();val expires=now+ttlMillis.coerceIn(60_000L,10*60_000L)
@@ -87,10 +91,10 @@ class DeviceEnrollmentRepository(private val db:HammamDatabase,private val ciphe
         val parsed=parsePairingOffer(payload);val now=System.currentTimeMillis()
         val state=loadPairingState(payload)?:error("PAIRING_OFFER_NOT_PENDING")
         check(state.studentId==parsed.studentId && state.publicId==parsed.publicId && state.expiresAt==parsed.expiresAt){"PAIRING_STATE_MISMATCH"}
-        if(now>state.expiresAt){savePairingState(payload,state.copy(status="EXPIRED"),now);error("PAIRING_PAYLOAD_EXPIRED")}
+        if(PairingOfferRules.isExpired(state.expiresAt,now))error("PAIRING_PAYLOAD_EXPIRED")
         if(authorization!=null && !authorization.hasScopedPermission(reviewerId,"MANAGE_DEVICE_ENROLLMENT","STUDENT",parsed.studentId))error("DEVICE_ENROLLMENT_PERMISSION_REQUIRED")
         val student=dao.getStudentById(parsed.studentId)?:error("STUDENT_NOT_FOUND")
-        if(state.status=="ACCEPTED")return@withTransaction dao.getActiveDevicesForStudent(parsed.studentId).firstOrNull{it.devicePublicId==parsed.publicId}?:error("PAIRING_ACCEPTED_DEVICE_MISSING")
+        check(student.status==StudentStatus.ACTIVE){"STUDENT_NOT_ACTIVE"}
         check(state.status=="PENDING"){"PAIRING_OFFER_NOT_PENDING"}
         val active=dao.getActiveDevicesForStudent(parsed.studentId);check(active.isEmpty()){"ACTIVE_DEVICE_EXISTS"}
         val device=StudentDeviceEntity(UUID.randomUUID().toString(),parsed.studentId,parsed.publicId,parsed.publicKey,cipher.encrypt(parsed.secretB64),now,null,DeviceStatus.ACTIVE,1)
@@ -103,7 +107,7 @@ class DeviceEnrollmentRepository(private val db:HammamDatabase,private val ciphe
         val parsed=parsePairingOffer(payload);val now=System.currentTimeMillis()
         val state=loadPairingState(payload)?:error("PAIRING_OFFER_NOT_PENDING")
         check(state.studentId==parsed.studentId && state.publicId==parsed.publicId && state.expiresAt==parsed.expiresAt){"PAIRING_STATE_MISMATCH"}
-        if(now>state.expiresAt){savePairingState(payload,state.copy(status="EXPIRED"),now);error("PAIRING_PAYLOAD_EXPIRED")}
+        if(PairingOfferRules.isExpired(state.expiresAt,now))error("PAIRING_PAYLOAD_EXPIRED")
         if(authorization!=null && !authorization.hasScopedPermission(reviewerId,"MANAGE_DEVICE_ENROLLMENT","STUDENT",parsed.studentId))error("DEVICE_ENROLLMENT_PERMISSION_REQUIRED")
         dao.getStudentById(parsed.studentId)?:error("STUDENT_NOT_FOUND");check(state.status=="PENDING"){"PAIRING_OFFER_NOT_PENDING"}
         savePairingState(payload,state.copy(status="REJECTED"),now)
@@ -135,14 +139,20 @@ class DeviceEnrollmentRepository(private val db:HammamDatabase,private val ciphe
     suspend fun setStatus(deviceId:String,status:DeviceStatus,actorId:String){db.withTransaction{
         val device=dao.getStudentDevice(deviceId)?:error("DEVICE_NOT_FOUND")
         if(authorization!=null && !authorization.hasScopedPermission(actorId,"MANAGE_DEVICE_ENROLLMENT","STUDENT",device.studentId))error("DEVICE_ENROLLMENT_PERMISSION_REQUIRED")
-        val now=System.currentTimeMillis();dao.updateStudentDevice(device.copy(status=status,version=device.version+1))
-        val student=dao.getStudentById(device.studentId)
-        if(student?.registeredDeviceId==deviceId && status!=DeviceStatus.ACTIVE)dao.updateStudent(student.copy(registeredDeviceId=null,updatedAt=now,version=student.version+1))
+        val now=System.currentTimeMillis();val student=dao.getStudentById(device.studentId)?:error("STUDENT_NOT_FOUND")
+        if(status==DeviceStatus.ACTIVE){
+            check(student.status==StudentStatus.ACTIVE){"STUDENT_NOT_ACTIVE"}
+            check(dao.getActiveDevicesForStudent(device.studentId).none{it.id!=deviceId}){"ACTIVE_DEVICE_EXISTS"}
+        }
+        dao.updateStudentDevice(device.copy(status=status,version=device.version+1))
+        if(status==DeviceStatus.ACTIVE && student.registeredDeviceId!=deviceId)dao.updateStudent(student.copy(registeredDeviceId=deviceId,updatedAt=now,version=student.version+1))
+        else if(student.registeredDeviceId==deviceId && status!=DeviceStatus.ACTIVE)dao.updateStudent(student.copy(registeredDeviceId=null,updatedAt=now,version=student.version+1))
         audit(actorId,"DEVICE_CHANGED",device.studentId,"{\"status\":\"${device.status}\"}","{\"status\":\"$status\"}","Device status workflow",now)
     }}
 
     suspend fun rotatingToken(deviceId:String,nowMillis:Long=System.currentTimeMillis()):String?{
         val device=dao.getStudentDevice(deviceId)?.takeIf{it.status==DeviceStatus.ACTIVE}?:return null
+        val student=dao.getStudentById(device.studentId)?.takeIf{it.status==StudentStatus.ACTIVE && it.registeredDeviceId==device.id}?:return null
         val encoded=device.presenceSecretCiphertext?.let{runCatching{cipher.decrypt(it)}.getOrNull()}?:return null
         val secret=runCatching{Base64.decode(encoded,Base64.NO_WRAP)}.getOrNull()?:return null
         return RotatingPresenceToken.token(secret,device.devicePublicId,nowMillis)
@@ -170,4 +180,9 @@ class DeviceEnrollmentRepository(private val db:HammamDatabase,private val ciphe
         val spec=KeyGenParameterSpec.Builder(alias,KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY).setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1")).setDigests(KeyProperties.DIGEST_SHA256).build()
         generator.initialize(spec);val pair=generator.generateKeyPair();return alias to Base64.encodeToString(pair.public.encoded,Base64.NO_WRAP)
     }
+}
+
+internal object PairingOfferRules {
+    fun isExpired(expiresAt:Long,now:Long)=now>expiresAt
+    fun canAccept(status:String,expiresAt:Long,now:Long)=status=="PENDING" && !isExpired(expiresAt,now)
 }

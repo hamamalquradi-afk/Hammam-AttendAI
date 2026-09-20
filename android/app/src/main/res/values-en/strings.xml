@@ -315,9 +315,12 @@
     <string name="ble_readiness_warning">BLE detection is not active for the current session. Resume or use a fallback; do not treat a technical failure as absence.</string>
     <string name="semester_ending_action">The semester is nearing its end. Review Close Semester &amp; Start New in administration.</string>
     <string name="presence_detection_status">Presence detection status</string>
-    <string name="backend_auth_token">Backend access token</string>
-    <string name="backend_auth_note">Optional backend authentication secret. Stored encrypted outside Room and DataStore.</string>
-    <string name="backend_auth_configured">Backend access token configured: %1$s</string>
+    <string name="sync_workspace_id">Sync workspace ID</string>
+    <string name="sync_workspace_note">Selected from account membership after provisioning. Manual changes cannot bypass backend membership checks.</string>
+    <string name="save_sync_workspace">Save sync workspace</string>
+    <string name="backend_auth_token">Backend provisioning/service credential</string>
+    <string name="backend_auth_note">Administrative provisioning and legacy service secret. It is not a sync session token and is encrypted outside Room/DataStore.</string>
+    <string name="backend_auth_configured">Provisioning/service credential configured: %1$s</string>
     <string name="attendance_review_title">Final attendance review</string>
     <string name="edit_attendance">Edit attendance</string>
     <string name="approve_attendance">Approve attendance</string>
@@ -355,4 +358,10 @@
     <string name="first_run_error_existing_no_admin">Existing data was found but there is no active Administrator that can be promoted. Restore a valid backup or clear app data only if you intend to start a new database.</string>
     <string name="first_run_error_pin_storage">Setup was saved, but the PIN could not be enabled. You can configure it later in Settings.</string>
     <string name="first_run_error_generic">Setup could not be completed. Check the entered data and try again.</string>
+    <string name="backend_account_state">Backend account state</string>
+    <string name="backend_account_id">Backend account ID</string>
+    <string name="backend_session_expiry">Backend session expiry (epoch ms)</string>
+    <string name="provision_backend_account">Provision this device account</string>
+    <string name="renew_backend_session">Renew session</string>
+    <string name="logout_backend_session">Log out session</string>
 </resources>

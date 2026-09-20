@@ -15,6 +15,7 @@ import com.hammam.attendai.domain.model.FinalAttendanceStatus
 import com.hammam.attendai.appeals.AppealLocalNotifier
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 data class AppealUiState(
     val context:AttendanceAppealContext?=null,
@@ -36,6 +37,7 @@ class AttendanceAppealViewModel(app:Application,private val savedStateHandle:Sav
     val appeals:StateFlow<List<AttendanceAppealEntity>> = _filter.flatMapLatest{repository.observeByStatus(it)}
         .stateIn(viewModelScope,SharingStarted.WhileSubscribed(5_000),emptyList())
     private val container=(app as HammamAttendAiApplication).container
+    private val reviewInFlight=ConcurrentHashMap.newKeySet<String>()
     val reviewRows:StateFlow<List<AppealReviewRow>> = combine(container.preferences.userId,_filter){user,status->user to status}.flatMapLatest{(user,status)->
         if(user==null)flowOf(emptyList()) else repository.observeReviewRows(user,status)
     }.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5_000),emptyList())
@@ -63,7 +65,8 @@ class AttendanceAppealViewModel(app:Application,private val savedStateHandle:Sav
         }
     }
     fun review(appealId:String,accept:Boolean,note:String,newStatus:FinalAttendanceStatus?,newPercentage:Double?){
-        viewModelScope.launch{
+        if(!reviewInFlight.add(appealId))return
+        viewModelScope.launch{try{
             val reviewerId=container.preferences.userId.first()
             if(reviewerId==null || !container.authorization.hasPermission(reviewerId,"REVIEW_APPEALS")){
                 _state.value=_state.value.copy(message="REVIEW_PERMISSION_REQUIRED");return@launch
@@ -72,6 +75,6 @@ class AttendanceAppealViewModel(app:Application,private val savedStateHandle:Sav
             val r=reviewUseCase(appealId,accept,note,reviewerId,newStatus,newPercentage,canEditFrozen)
             if(r is AppealOperationResult.Success) AppealLocalNotifier(getApplication()).notifyReviewed(appealId,accept)
             _state.value=_state.value.copy(message=when(r){is AppealOperationResult.Success->"APPEAL_REVIEW_SAVED";is AppealOperationResult.Failure->r.code})
-        }
+        }finally{reviewInFlight.remove(appealId)}}
     }
 }

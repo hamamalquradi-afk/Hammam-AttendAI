@@ -315,9 +315,12 @@
     <string name="ble_readiness_warning">اكتشاف BLE غير نشط للجلسة الحالية. استخدم الاستئناف أو وسيلة بديلة ولا تعتمد غيابًا تقنيًا.</string>
     <string name="semester_ending_action">الفصل يقترب من نهايته. راجع خيار إغلاق الفصل وبدء فصل جديد من الإدارة.</string>
     <string name="presence_detection_status">حالة اكتشاف الحضور</string>
-    <string name="backend_auth_token">رمز وصول Backend</string>
-    <string name="backend_auth_note">سر اختياري للمصادقة مع Backend. يُحفظ مشفرًا خارج Room وDataStore.</string>
-    <string name="backend_auth_configured">تم إعداد رمز الوصول: %1$s</string>
+    <string name="sync_workspace_id">معرّف مساحة عمل المزامنة</string>
+    <string name="sync_workspace_note">تُحدد من عضوية الحساب بعد التهيئة. تغييرها يدويًا لا يتجاوز تحقق العضوية في الخادم.</string>
+    <string name="save_sync_workspace">حفظ مساحة عمل المزامنة</string>
+    <string name="backend_auth_token">رمز التهيئة/الخدمات للـBackend</string>
+    <string name="backend_auth_note">سر إداري للتهيئة والخدمات القديمة. لا يُستخدم كجلسة مزامنة؛ يُحفظ مشفرًا خارج Room وDataStore.</string>
+    <string name="backend_auth_configured">تم إعداد رمز التهيئة/الخدمات: %1$s</string>
     <string name="attendance_review_title">مراجعة الحضور النهائية</string>
     <string name="edit_attendance">تعديل الحضور</string>
     <string name="approve_attendance">اعتماد الحضور</string>
@@ -355,4 +358,10 @@
     <string name="first_run_error_existing_no_admin">توجد بيانات سابقة ولكن لا يوجد Administrator نشط يمكن ترقيته. استخدم نسخة احتياطية صحيحة أو امسح بيانات التطبيق فقط إذا كنت تريد بدء قاعدة جديدة.</string>
     <string name="first_run_error_pin_storage">تم حفظ الإعداد، لكن تعذر تفعيل PIN. يمكنك ضبطه لاحقًا من الإعدادات.</string>
     <string name="first_run_error_generic">تعذر إكمال الإعداد. راجع البيانات وحاول مرة أخرى.</string>
+    <string name="backend_account_state">حالة حساب Backend</string>
+    <string name="backend_account_id">معرّف حساب Backend</string>
+    <string name="backend_session_expiry">انتهاء جلسة Backend (epoch ms)</string>
+    <string name="provision_backend_account">تهيئة حساب هذا الجهاز</string>
+    <string name="renew_backend_session">تجديد الجلسة</string>
+    <string name="logout_backend_session">تسجيل خروج الجلسة</string>
 </resources>

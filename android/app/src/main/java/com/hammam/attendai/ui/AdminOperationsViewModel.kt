@@ -15,8 +15,13 @@ import com.hammam.attendai.data.repository.AcademicManagementRepository
 import com.hammam.attendai.data.repository.TimetableRepository
 import com.hammam.attendai.importexport.StudentCsv
 import com.hammam.attendai.importexport.StudentImportPreview
+import com.hammam.attendai.reports.ReportLifecycleRules
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Job
+import java.util.concurrent.atomic.AtomicBoolean
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.File
@@ -47,6 +52,7 @@ class AdminOperationsViewModel(app:Application):AndroidViewModel(app){
     val groups=repo.groups.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
     val teachers=repo.teachers.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
     val subjects=repo.subjects.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
+    val attendancePolicies=repo.attendancePolicies.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
     val reportSettings=container.reports.observeAllSettings().stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
     val accessUsers=dao.observeUserAccessRows().stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
     val accessRoles=dao.observeRoles().stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
@@ -74,6 +80,12 @@ class AdminOperationsViewModel(app:Application):AndroidViewModel(app){
     private val _selectedConfigUri=MutableStateFlow<Uri?>(null);val selectedConfigUri=_selectedConfigUri.asStateFlow()
     private val _studentImportPreview=MutableStateFlow<StudentImportPreview?>(null);val studentImportPreview=_studentImportPreview.asStateFlow()
     private val _integrityResult=MutableStateFlow<com.hammam.attendai.data.repository.DataIntegrityRepository.Result?>(null);val integrityResult=_integrityResult.asStateFlow()
+    private val backupOperationInFlight=AtomicBoolean(false)
+    private val configurationOperationInFlight=AtomicBoolean(false)
+    private val studentTransferInFlight=AtomicBoolean(false)
+    private val integrityScanInFlight=AtomicBoolean(false)
+    private val timetableApprovalInFlight=AtomicBoolean(false)
+    private var reviewLoadJob:Job?=null
     init{viewModelScope.launch{loadAiState()}}
 
     fun clearMessage(){_message.value=null}
@@ -100,6 +112,10 @@ class AdminOperationsViewModel(app:Application):AndroidViewModel(app){
 
     private suspend fun actor():String=preferences.userId.first()?:error("USER_NOT_INITIALIZED")
     private fun launch(action:suspend(String)->Unit)=viewModelScope.launch{try{action(actor())}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(e:Exception){Log.e("AdminOperationsViewModel","OPERATION_FAILED",e);_message.value=e.message?:"OPERATION_FAILED"}}
+    private fun guardedLaunch(guard:AtomicBoolean,action:suspend(String)->Unit):Job{
+        if(!guard.compareAndSet(false,true))return viewModelScope.launch{}
+        return viewModelScope.launch{try{action(actor())}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(e:Exception){Log.e("AdminOperationsViewModel","OPERATION_FAILED",e);_message.value=e.message?:"OPERATION_FAILED"}finally{guard.set(false)}}
+    }
 
     fun addUniversity(name:String)=launch{repo.addUniversity(name,it);_message.value="UNIVERSITY_CREATED"}
     fun addFaculty(universityId:String,name:String)=launch{repo.addFaculty(universityId,name,it);_message.value="FACULTY_CREATED"}
@@ -112,11 +128,15 @@ class AdminOperationsViewModel(app:Application):AndroidViewModel(app){
     fun addGroup(sectionId:String,name:String)=launch{repo.addGroup(sectionId,name,it);_message.value="GROUP_CREATED"}
     fun addTeacher(name:String,phone:String?,wa:String?,email:String?)=launch{repo.addTeacher(name,phone,wa,email,it);_message.value="TEACHER_CREATED"}
     fun archiveTeacher(id:String,reason:String)=launch{repo.archiveTeacher(id,it,reason);_message.value="TEACHER_ARCHIVED"}
-    fun addSubject(code:String,name:String,teacherId:String,levelId:String,semesterId:String,groupId:String,policyId:String?)=launch{repo.addSubject(code,name,teacherId,levelId,semesterId,groupId,policyId,it);_message.value="SUBJECT_CREATED"}
+    fun addAttendancePolicy(name:String,full:Double,partial:Double,late:Int,early:Int,absence:Double,grace:Long,minimum:Long,confidence:Double)=launch{repo.addAttendancePolicy(name,full,partial,late,early,absence,grace,minimum,confidence,it);_message.value="ATTENDANCE_POLICY_CREATED"}
+    fun addSubject(code:String,name:String,teacherId:String,levelId:String,semesterId:String,groupId:String,policyId:String)=launch{repo.addSubject(code,name,teacherId,levelId,semesterId,groupId,policyId,it);_message.value="SUBJECT_CREATED"}
+    fun updateSubjectAttendancePolicy(subjectId:String,policyId:String)=launch{repo.updateSubjectAttendancePolicy(subjectId,policyId,it);_message.value="SUBJECT_ATTENDANCE_POLICY_UPDATED"}
     fun archiveSubject(id:String,reason:String)=launch{repo.archiveSubject(id,it,reason);_message.value="SUBJECT_ARCHIVED"}
     fun saveReportSetting(teacherId:String,subjectId:String?,enabled:Boolean,frequencies:Set<String>,sendTime:String,weeklyDay:Int?,monthlyDay:Int?,timezone:String,channel:String,format:String,includeDetails:Boolean,requireApproval:Boolean,aiSummary:Boolean,sendIfNoLecture:Boolean)=launch{uid->
         require(container.authorization.hasPermission(uid,"MANAGE_REPORT_SETTINGS")){"MANAGE_REPORT_SETTINGS_PERMISSION_REQUIRED"}
         require(teacherId.isNotBlank() && frequencies.isNotEmpty()){"REPORT_SETTING_REQUIRED_FIELDS"}
+        ReportLifecycleRules.validateSchedule(frequencies,sendTime,weeklyDay,monthlyDay,timezone,null)?.let{error(it)}
+        require(!aiSummary){"AI_SUMMARY_NOT_IMPLEMENTED"}
         val existing=reportSettings.value.firstOrNull{it.teacherId==teacherId&&it.subjectId==subjectId}
         val now=System.currentTimeMillis();val row=TeacherReportSettingEntity(existing?.id?:java.util.UUID.randomUUID().toString(),teacherId,subjectId,enabled,frequencies.sorted().joinToString(","),sendTime,weeklyDay,monthlyDay,"END_OF_SEMESTER" in frequencies,null,timezone,channel,format,includeDetails,requireApproval,aiSummary,sendIfNoLecture,now,(existing?.version?:0)+1)
         container.reports.saveSetting(row,uid);_message.value="REPORT_SETTING_SAVED"
@@ -130,63 +150,70 @@ class AdminOperationsViewModel(app:Application):AndroidViewModel(app){
     fun importDocument(groupId:String,weekStart:String,uri:Uri,mime:String?)=launch{uid->
         val type=when{mime?.contains("pdf",true)==true->"PDF";mime?.startsWith("image/")==true->"IMAGE";else->"DOCUMENT"}
         val id=timetable.createDraft(groupId,weekStart,type,uri.toString(),uid);_selectedGroup.value=groupId
-        val text=if(type=="DOCUMENT")readText(uri) else tryVision(uri,mime?:if(type=="PDF")"application/pdf" else "image/jpeg")
+        val text=withContext(Dispatchers.IO){if(type=="DOCUMENT")readText(uri) else tryVision(uri,mime?:if(type=="PDF")"application/pdf" else "image/jpeg")}
         if(!text.isNullOrBlank())timetable.saveManualCsv(id,text,uid) else timetable.markNeedsReview(id,uid,"SOURCE_SAVED_MANUAL_REVIEW_REQUIRED")
         loadReview(id);_message.value=if(text.isNullOrBlank())"SOURCE_SAVED_MANUAL_REVIEW_REQUIRED" else "TIMETABLE_IMPORTED_FOR_REVIEW"
     }
-    fun importCameraImage(groupId:String,weekStart:String,uri:Uri)=launch{uid->val id=timetable.createDraft(groupId,weekStart,"CAMERA",uri.toString(),uid);val text=tryVision(uri,"image/jpeg");if(!text.isNullOrBlank())timetable.saveManualCsv(id,text,uid) else timetable.markNeedsReview(id,uid,"IMAGE_REQUIRES_REVIEW_OR_VISION_EXTRACTION");_selectedGroup.value=groupId;loadReview(id);_message.value=if(text.isNullOrBlank())"IMAGE_DRAFT_SAVED" else "TIMETABLE_IMPORTED_FOR_REVIEW"}
+    fun importCameraImage(groupId:String,weekStart:String,uri:Uri)=launch{uid->val id=timetable.createDraft(groupId,weekStart,"CAMERA",uri.toString(),uid);val text=withContext(Dispatchers.IO){tryVision(uri,"image/jpeg")};if(!text.isNullOrBlank())timetable.saveManualCsv(id,text,uid) else timetable.markNeedsReview(id,uid,"IMAGE_REQUIRES_REVIEW_OR_VISION_EXTRACTION");_selectedGroup.value=groupId;loadReview(id);_message.value=if(text.isNullOrBlank())"IMAGE_DRAFT_SAVED" else "TIMETABLE_IMPORTED_FOR_REVIEW"}
     fun saveRows(scheduleId:String,rows:List<TimetableRepository.DraftRow>)=launch{uid->val issues=timetable.replaceDraftRows(scheduleId,rows,uid);loadReview(scheduleId);_message.value=if(issues.isEmpty())"TIMETABLE_DRAFT_VALID" else "TIMETABLE_NEEDS_REVIEW"}
-    fun approve(scheduleId:String,reason:String)=launch{uid->timetable.approve(scheduleId,uid,reason);loadReview(scheduleId);_message.value="TIMETABLE_APPROVED"}
-    fun loadReview(id:String){viewModelScope.launch{runCatching{timetable.review(id)}.onSuccess{_review.value=it}.onFailure{_message.value=it.message?:"TIMETABLE_LOAD_FAILED"}}}
-
-    fun runDataIntegrity()=launch{uid->require(container.authorization.hasPermission(uid,"RUN_DATA_INTEGRITY")){"RUN_DATA_INTEGRITY_PERMISSION_REQUIRED"};_integrityResult.value=container.dataIntegrity.run();_message.value=if(_integrityResult.value?.healthy==true)"DATA_INTEGRITY_HEALTHY" else "DATA_INTEGRITY_NEEDS_ATTENTION"}
-
-    fun previewStudentCsv(uri:Uri)=launch{uid->
-        require(container.authorization.hasPermission(uid,"EDIT_STUDENTS")){"EDIT_STUDENTS_PERMISSION_REQUIRED"}
-        val text=readText(uri)?:error("CSV_READ_FAILED");_studentImportPreview.value=container.students.validateImport(StudentCsv.preview(text));_message.value="STUDENT_CSV_PREVIEW_READY"
+    fun approve(scheduleId:String,reason:String)=guardedLaunch(timetableApprovalInFlight){uid->timetable.approve(scheduleId,uid,reason);loadReview(scheduleId);_message.value="TIMETABLE_APPROVED"}
+    fun loadReview(id:String){
+        reviewLoadJob?.cancel()
+        reviewLoadJob=viewModelScope.launch{
+            try{_review.value=timetable.review(id)}
+            catch(e:kotlinx.coroutines.CancellationException){throw e}
+            catch(e:Exception){Log.e("AdminOperationsViewModel","TIMETABLE_LOAD_FAILED",e);_message.value=e.message?:"TIMETABLE_LOAD_FAILED"}
+        }
     }
-    fun confirmStudentCsvImport()=launch{uid->
+
+    fun runDataIntegrity()=guardedLaunch(integrityScanInFlight){uid->require(container.authorization.hasPermission(uid,"RUN_DATA_INTEGRITY")){"RUN_DATA_INTEGRITY_PERMISSION_REQUIRED"};_integrityResult.value=container.dataIntegrity.run();_message.value=if(_integrityResult.value?.healthy==true)"DATA_INTEGRITY_HEALTHY" else "DATA_INTEGRITY_NEEDS_ATTENTION"}
+
+    fun previewStudentCsv(uri:Uri)=guardedLaunch(studentTransferInFlight){uid->
+        require(container.authorization.hasPermission(uid,"EDIT_STUDENTS")){"EDIT_STUDENTS_PERMISSION_REQUIRED"}
+        val preview=withContext(Dispatchers.IO){val text=readText(uri)?:error("CSV_READ_FAILED");container.students.validateImport(StudentCsv.preview(text))};_studentImportPreview.value=preview;_message.value="STUDENT_CSV_PREVIEW_READY"
+    }
+    fun confirmStudentCsvImport()=guardedLaunch(studentTransferInFlight){uid->
         require(container.authorization.hasPermission(uid,"EDIT_STUDENTS")){"EDIT_STUDENTS_PERMISSION_REQUIRED"}
         val preview=_studentImportPreview.value?:error("CSV_PREVIEW_REQUIRED");require(preview.invalid.isEmpty()){"CSV_HAS_INVALID_ROWS"};val count=container.students.confirmImport(preview.valid,uid);_studentImportPreview.value=null;_message.value="STUDENT_CSV_IMPORTED_$count"
     }
-    fun exportStudentsCsv(uri:Uri)=launch{uid->
+    fun exportStudentsCsv(uri:Uri)=guardedLaunch(studentTransferInFlight){uid->
         require(container.authorization.hasPermission(uid,"VIEW_STUDENTS")){"VIEW_STUDENTS_PERMISSION_REQUIRED"}
-        val rows=container.students.observeScoped(uid).first().map{it.universityNumber to it.fullName};val csv=StudentCsv.export(rows);getApplication<Application>().contentResolver.openOutputStream(uri,"w")!!.bufferedWriter(Charsets.UTF_8).use{it.write(csv)};_message.value="STUDENT_CSV_EXPORTED"
+        withContext(Dispatchers.IO){val rows=container.students.observeScoped(uid).first().map{it.universityNumber to it.fullName};val csv=StudentCsv.export(rows);getApplication<Application>().contentResolver.openOutputStream(uri,"w")!!.bufferedWriter(Charsets.UTF_8).use{it.write(csv)}};_message.value="STUDENT_CSV_EXPORTED"
     }
     fun clearStudentCsvPreview(){_studentImportPreview.value=null}
 
-    fun exportConfiguration(uri:Uri)=launch{uid->
+    fun exportConfiguration(uri:Uri)=guardedLaunch(configurationOperationInFlight){uid->
         require(container.authorization.hasPermission(uid,"MANAGE_SETTINGS")||container.authorization.hasPermission(uid,"MANAGE_BACKUP")){"MANAGE_SETTINGS_PERMISSION_REQUIRED"}
         val tmp=File(getApplication<Application>().cacheDir,"hammam-config-${System.currentTimeMillis()}.hconf")
-        try{container.configurationBackup.export(tmp);getApplication<Application>().contentResolver.openOutputStream(uri,"w")!!.use{out->tmp.inputStream().use{it.copyTo(out)}};_message.value="CONFIGURATION_EXPORTED"}finally{tmp.delete()}
+        try{withContext(Dispatchers.IO){container.configurationBackup.export(tmp);getApplication<Application>().contentResolver.openOutputStream(uri,"w")!!.use{out->tmp.inputStream().use{it.copyTo(out)}}};_message.value="CONFIGURATION_EXPORTED"}finally{withContext(Dispatchers.IO){tmp.delete()}}
     }
-    fun previewConfiguration(uri:Uri)=launch{uid->
+    fun previewConfiguration(uri:Uri)=guardedLaunch(configurationOperationInFlight){uid->
         require(container.authorization.hasPermission(uid,"MANAGE_SETTINGS")||container.authorization.hasPermission(uid,"MANAGE_BACKUP")){"MANAGE_SETTINGS_PERMISSION_REQUIRED"}
-        val tmp=copyUriToCache(uri,"config-preview")?:error("CONFIG_READ_FAILED");try{val preview=container.configurationBackup.preview(tmp);_configPreview.value=preview;if(preview.valid)_selectedConfigUri.value=uri;_message.value=if(preview.valid)"CONFIGURATION_VALIDATED" else "CONFIGURATION_INVALID"}finally{tmp.delete()}
+        val tmp=withContext(Dispatchers.IO){copyUriToCache(uri,"config-preview")}?:error("CONFIG_READ_FAILED");try{val preview=withContext(Dispatchers.IO){container.configurationBackup.preview(tmp)};_configPreview.value=preview;if(preview.valid)_selectedConfigUri.value=uri;_message.value=if(preview.valid)"CONFIGURATION_VALIDATED" else "CONFIGURATION_INVALID"}finally{withContext(Dispatchers.IO){tmp.delete()}}
     }
-    fun importSelectedConfiguration()=launch{uid->
+    fun importSelectedConfiguration()=guardedLaunch(configurationOperationInFlight){uid->
         require(container.authorization.hasPermission(uid,"MANAGE_SETTINGS")||container.authorization.hasPermission(uid,"MANAGE_BACKUP")){"MANAGE_SETTINGS_PERMISSION_REQUIRED"}
-        val uri=_selectedConfigUri.value?:error("CONFIGURATION_NOT_SELECTED");val tmp=copyUriToCache(uri,"config-import")?:error("CONFIG_READ_FAILED");try{container.configurationBackup.importConfirmed(tmp);_message.value="CONFIGURATION_IMPORTED"}finally{tmp.delete()}
+        val uri=_selectedConfigUri.value?:error("CONFIGURATION_NOT_SELECTED");val tmp=withContext(Dispatchers.IO){copyUriToCache(uri,"config-import")}?:error("CONFIG_READ_FAILED");try{withContext(Dispatchers.IO){container.configurationBackup.importConfirmed(tmp)};_message.value="CONFIGURATION_IMPORTED"}finally{withContext(Dispatchers.IO){tmp.delete()}}
     }
 
-    fun exportEncryptedBackup(uri:Uri,passphrase:String)=launch{uid->
+    fun exportEncryptedBackup(uri:Uri,passphrase:String)=guardedLaunch(backupOperationInFlight){uid->
         require(container.authorization.hasPermission(uid,"MANAGE_BACKUP")){"MANAGE_BACKUP_PERMISSION_REQUIRED"}
         val app=getApplication<Application>();val tmp=File(app.cacheDir,"hammam-export-${System.currentTimeMillis()}.hammamattend")
-        try{container.backupManager.createBackup(app.getDatabasePath("hammam_attendai.db"),tmp,passphrase.toCharArray());app.contentResolver.openOutputStream(uri,"w")!!.use{out->tmp.inputStream().use{it.copyTo(out)}};_backupStatus.value="BACKUP_CREATED"}finally{tmp.delete()}
+        try{withContext(Dispatchers.IO){container.backupManager.createBackup(app.getDatabasePath("hammam_attendai.db"),tmp,passphrase.toCharArray());app.contentResolver.openOutputStream(uri,"w")!!.use{out->tmp.inputStream().use{it.copyTo(out)}}};_backupStatus.value="BACKUP_CREATED"}finally{withContext(Dispatchers.IO){tmp.delete()}}
     }
-    fun validateBackup(uri:Uri,passphrase:String)=launch{uid->
+    fun validateBackup(uri:Uri,passphrase:String)=guardedLaunch(backupOperationInFlight){uid->
         require(container.authorization.hasPermission(uid,"MANAGE_BACKUP")){"MANAGE_BACKUP_PERMISSION_REQUIRED"}
-        val tmp=copyUriToCache(uri,"backup-validate")?:error("BACKUP_READ_FAILED");try{val result=container.backupManager.validate(tmp,passphrase.toCharArray());require(result.valid){result.error?:"BACKUP_INVALID"};_selectedBackupUri.value=uri;_backupStatus.value="BACKUP_VALIDATED_DB_${result.databaseVersion}"}finally{tmp.delete()}
+        val tmp=withContext(Dispatchers.IO){copyUriToCache(uri,"backup-validate")}?:error("BACKUP_READ_FAILED");try{val result=withContext(Dispatchers.IO){container.backupManager.validate(tmp,passphrase.toCharArray())};require(result.valid){result.error?:"BACKUP_INVALID"};_selectedBackupUri.value=uri;_backupStatus.value="BACKUP_VALIDATED_DB_${result.databaseVersion}"}finally{withContext(Dispatchers.IO){tmp.delete()}}
     }
-    fun restoreSelectedBackup(passphrase:String)=launch{uid->
+    fun restoreSelectedBackup(passphrase:String)=guardedLaunch(backupOperationInFlight){uid->
         require(container.authorization.hasPermission(uid,"RESTORE_BACKUP")||container.authorization.hasPermission(uid,"MANAGE_BACKUP")){"RESTORE_BACKUP_PERMISSION_REQUIRED"}
-        val uri=_selectedBackupUri.value?:error("BACKUP_NOT_SELECTED");val tmp=copyUriToCache(uri,"backup-restore")?:error("BACKUP_READ_FAILED")
-        try{val result=container.backupManager.stageRestore(tmp,passphrase.toCharArray());require(result.valid){result.error?:"BACKUP_RESTORE_VALIDATION_FAILED"};_backupStatus.value="BACKUP_RESTORE_STAGED_RESTART_REQUIRED"}finally{tmp.delete()}
+        val uri=_selectedBackupUri.value?:error("BACKUP_NOT_SELECTED");val tmp=withContext(Dispatchers.IO){copyUriToCache(uri,"backup-restore")}?:error("BACKUP_READ_FAILED")
+        try{val result=withContext(Dispatchers.IO){container.backupManager.stageRestore(tmp,passphrase.toCharArray())};require(result.valid){result.error?:"BACKUP_RESTORE_VALIDATION_FAILED"};_backupStatus.value="BACKUP_RESTORE_STAGED_RESTART_REQUIRED"}finally{withContext(Dispatchers.IO){tmp.delete()}}
     }
-    fun createShareableBackup(passphrase:String)=launch{uid->
+    fun createShareableBackup(passphrase:String)=guardedLaunch(backupOperationInFlight){uid->
         require(container.authorization.hasPermission(uid,"MANAGE_BACKUP")){"MANAGE_BACKUP_PERMISSION_REQUIRED"}
-        val app=getApplication<Application>();val dir=File(app.filesDir,"backups").apply{mkdirs()};val target=File(dir,"Hammam-AttendAI-${System.currentTimeMillis()}.hammamattend")
-        container.backupManager.createBackup(app.getDatabasePath("hammam_attendai.db"),target,passphrase.toCharArray());_shareBackupUri.value=FileProvider.getUriForFile(app,"${app.packageName}.files",target);_backupStatus.value="BACKUP_READY_TO_SHARE"
+        val app=getApplication<Application>();val target=withContext(Dispatchers.IO){val dir=File(app.filesDir,"backups").apply{mkdirs()};File(dir,"Hammam-AttendAI-${System.currentTimeMillis()}.hammamattend").also{container.backupManager.createBackup(app.getDatabasePath("hammam_attendai.db"),it,passphrase.toCharArray())}}
+        _shareBackupUri.value=FileProvider.getUriForFile(app,"${app.packageName}.files",target);_backupStatus.value="BACKUP_READY_TO_SHARE"
     }
     fun consumeShareBackup(){_shareBackupUri.value=null}
     private fun copyUriToCache(uri:Uri,prefix:String):File?=runCatching{val app=getApplication<Application>();val f=File(app.cacheDir,"$prefix-${System.currentTimeMillis()}.bin");app.contentResolver.openInputStream(uri)!!.use{input->f.outputStream().use{input.copyTo(it)}};f}.getOrNull()

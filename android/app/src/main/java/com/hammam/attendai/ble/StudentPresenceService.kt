@@ -19,20 +19,25 @@ import com.hammam.attendai.MainActivity
 import com.hammam.attendai.R
 import com.hammam.attendai.domain.model.DeviceStatus
 import com.hammam.attendai.domain.model.LectureStatus
+import com.hammam.attendai.domain.model.StudentStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 
 class StudentPresenceService:Service(){
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Default)
     private var presenceJob:Job?=null
+    private var transitionJob:Job?=null
+    private val presenceGeneration=AtomicLong(0)
     private val advertiser by lazy{StudentBleAdvertiser(this)}
 
     override fun onCreate(){
@@ -45,7 +50,7 @@ class StudentPresenceService:Service(){
 
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{
         if(intent?.action==ACTION_STOP){stopPresence();return START_NOT_STICKY}
-        if(presenceJob?.isActive==true)return START_NOT_STICKY
+        if(presenceJob?.isActive==true || transitionJob?.isActive==true)return START_NOT_STICKY
         val studentId=intent?.getStringExtra(EXTRA_STUDENT_ID)
         val deviceId=intent?.getStringExtra(EXTRA_DEVICE_ID)
         val lectureId=intent?.getStringExtra(EXTRA_LECTURE_ID)
@@ -55,9 +60,14 @@ class StudentPresenceService:Service(){
         if(!startForegroundSafely()){
             reportError("PRESENCE_FOREGROUND_START_FAILED");stopSelf();return START_NOT_STICKY
         }
-        presenceJob?.cancel()
-        _error.value=null
-        presenceJob=scope.launch{runPresenceLoop(studentId,deviceId,lectureId)}
+        val generation=presenceGeneration.incrementAndGet()
+        transitionJob=scope.launch{
+            val previous=presenceJob
+            previous?.cancelAndJoin()
+            if(!isActive)return@launch
+            _error.value=null
+            presenceJob=launch{runPresenceLoop(studentId,deviceId,lectureId,generation)}
+        }
         return START_NOT_STICKY
     }
 
@@ -78,17 +88,19 @@ class StudentPresenceService:Service(){
         return runCatching{ServiceCompat.startForeground(this,NOTIFICATION_ID,notification,type);true}.getOrDefault(false)
     }
 
-    private suspend fun runPresenceLoop(studentId:String,deviceId:String,lectureId:String){
+    private suspend fun runPresenceLoop(studentId:String,deviceId:String,lectureId:String,generation:Long){
         val container=(application as HammamAttendAiApplication).container
         val dao=container.database.coreDao()
         try{
             while(scope.isActive){
-                val student=dao.getStudentById(studentId)?:return reportError("STUDENT_PROFILE_NOT_LINKED")
-                val device=dao.getStudentDevice(deviceId)?.takeIf{it.studentId==studentId&&it.status==DeviceStatus.ACTIVE}?:return reportError("ACTIVE_DEVICE_REQUIRED")
+                if(dao.isFeatureEnabled("BLE_ATTENDANCE")!=true)return reportError("BLE_ATTENDANCE_DISABLED")
+                val student=dao.getStudentById(studentId)?.takeIf{it.status==StudentStatus.ACTIVE}?:return reportError("STUDENT_PROFILE_NOT_ACTIVE")
+                val device=dao.getStudentDevice(deviceId)?.takeIf{it.studentId==studentId&&it.status==DeviceStatus.ACTIVE&&student.registeredDeviceId==it.id}?:return reportError("ACTIVE_DEVICE_REQUIRED")
                 val lecture=dao.getLectureById(lectureId)?.takeIf{it.status==LectureStatus.ACTIVE&&it.groupId==student.groupId}?:return reportError("NO_ACTIVE_LECTURE")
+                if(dao.getAttendanceRecord(lecture.id,student.id)==null)return reportError("STUDENT_NOT_IN_ATTENDANCE_ROSTER")
                 if(!bluetoothReady())return reportError("BLE_ADVERTISE_UNAVAILABLE")
                 val token=container.devices.rotatingToken(device.id)?:return reportError("BLE_TOKEN_UNAVAILABLE")
-                if(!advertiser.start(token){code->reportError("BLE_ADVERTISE_FAILED_$code");presenceJob?.cancel()})return reportError("BLE_ADVERTISE_UNAVAILABLE")
+                if(!advertiser.start(token){code->if(presenceGeneration.get()==generation){reportError("BLE_ADVERTISE_FAILED_$code");presenceJob?.cancel()}})return reportError("BLE_ADVERTISE_UNAVAILABLE")
                 _active.value=true
                 delay(20_000)
             }
@@ -115,8 +127,8 @@ class StudentPresenceService:Service(){
     }
 
     private fun reportError(code:String){_error.value=code;_active.value=false}
-    private fun stopPresence(){presenceJob?.cancel();presenceJob=null;advertiser.stop();_active.value=false;ServiceCompat.stopForeground(this,ServiceCompat.STOP_FOREGROUND_REMOVE);stopSelf()}
-    override fun onDestroy(){presenceJob?.cancel();advertiser.stop();_active.value=false;scope.cancel();super.onDestroy()}
+    private fun stopPresence(){presenceGeneration.incrementAndGet();transitionJob?.cancel();presenceJob?.cancel();presenceJob=null;advertiser.stop();_active.value=false;ServiceCompat.stopForeground(this,ServiceCompat.STOP_FOREGROUND_REMOVE);stopSelf()}
+    override fun onDestroy(){transitionJob?.cancel();presenceJob?.cancel();advertiser.stop();_active.value=false;scope.cancel();super.onDestroy()}
     override fun onBind(intent:Intent?):IBinder?=null
 
     companion object{

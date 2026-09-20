@@ -2,6 +2,8 @@
 
 package com.hammam.attendai.ui
 
+import com.hammam.attendai.sync.SyncIntegrityRules
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
@@ -55,6 +57,9 @@ import com.hammam.attendai.data.local.dao.AppealReviewRow
 import com.hammam.attendai.data.local.entity.*
 import com.hammam.attendai.domain.model.*
 import com.hammam.attendai.domain.setup.FirstRunSetup
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Date
 
 data class DailyHomeUiState(
@@ -87,7 +92,8 @@ data class DailyHomeUiState(
             "Representative","Assistant Representative"->{
                 item{MetricPair(stringResource(R.string.pending_reviews),daily.pendingReviews.toString(),stringResource(R.string.attendance_appeals),daily.pendingAppeals.toString())}
                 item{Text("${stringResource(R.string.weekly_timetable_status)}: ${daily.home.weeklyTimetable?.status ?: "NOT_IMPORTED"}")}
-                if(s.activeLecture==null && "START_LECTURE" in daily.permissions)item{Button(onClick=onStartAttendance,modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.start_attendance))}}
+                val now=System.currentTimeMillis();val next=daily.home.nextLecture;val canStart=next!=null&&next.status in setOf(LectureStatus.READY,LectureStatus.SCHEDULED)&&next.scheduledEnd>next.scheduledStart&&now>=next.scheduledStart&&now<next.scheduledEnd
+                if(s.activeLecture==null && canStart && "START_LECTURE" in daily.permissions)item{Button(onClick=onStartAttendance,modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.start_attendance))}}
                 if(s.activeLecture!=null)item{OutlinedButton(onClick=onResumeAttendance,modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.resume_attendance))}}
                 if(daily.role=="Assistant Representative"&&s.activeLecture!=null&&"TAKE_OVER_ATTENDANCE" in daily.permissions)item{Button(onClick=onTakeOver,modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.take_over_attendance))}}
                 if(s.activeLecture!=null&&daily.bleState !is DetectorState.Active)item{Text(stringResource(R.string.ble_readiness_warning),color=MaterialTheme.colorScheme.error)}
@@ -184,25 +190,65 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
     appendLine("recentSanitizedErrors=${d.recentSanitizedErrors.joinToString("|").ifBlank{"NONE"}}")
 }
 
-@Composable fun StudentsScreen(students:List<StudentEntity>,onAdd:(String,String?)->Unit,onSelect:(StudentEntity)->Unit){
-    var query by rememberSaveable{mutableStateOf("")}; var show by rememberSaveable{mutableStateOf(false)}
+@Composable fun StudentsScreen(
+    students:List<StudentEntity>,levels:List<LevelEntity>,batches:List<BatchEntity>,sections:List<SectionEntity>,groups:List<GroupEntity>,
+    onAdd:(String,String?,String,String,String,String)->Unit,onUpdateScope:(String,String,String,String,String)->Unit,onSelect:(StudentEntity)->Unit
+){
+    var query by rememberSaveable{mutableStateOf("")};var showAdd by rememberSaveable{mutableStateOf(false)};var scopeStudentId by rememberSaveable{mutableStateOf<String?>(null)}
     Column(Modifier.fillMaxSize().padding(16.dp)){
         Text(stringResource(R.string.students),style=MaterialTheme.typography.headlineMedium)
-        FilledTonalButton(onClick={show=true},modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.PersonAdd,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.add_student))}
+        FilledTonalButton(onClick={showAdd=true},modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.PersonAdd,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.add_student))}
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.search_students))},leadingIcon={Icon(Icons.Default.Search,null)})
         val filtered=students.filter{query.isBlank()||it.fullName.contains(query,true)||(it.universityNumber?.contains(query)==true)}
         if(filtered.isEmpty())Box(Modifier.fillMaxSize().padding(24.dp)){Text(stringResource(R.string.empty_students))}
-        else LazyColumn(Modifier.weight(1f)){items(filtered,key={it.id}){s->ListItem(
-            headlineContent={Text(s.fullName)},supportingContent={LtrText(s.universityNumber.orEmpty())},
-            leadingContent={Icon(Icons.Default.AccountCircle,null)},trailingContent={Icon(Icons.Default.ChevronLeft,null)},
-            modifier=Modifier.clickable{onSelect(s)}
-        )}}
+        else LazyColumn(Modifier.weight(1f)){items(filtered,key={it.id}){student->
+            val batch=student.batchId?.let{id->batches.firstOrNull{it.id==id}};val section=student.sectionId?.let{id->sections.firstOrNull{it.id==id}};val group=student.groupId?.let{id->groups.firstOrNull{it.id==id}}
+            val incomplete=student.levelId==null||levels.none{it.id==student.levelId}||batch?.levelId!=student.levelId||section?.batchId!=student.batchId||group?.sectionId!=student.sectionId
+            ListItem(
+                headlineContent={Text(student.fullName)},
+                supportingContent={Column{LtrText(student.universityNumber.orEmpty());if(incomplete)Text(stringResource(R.string.needs_review),color=MaterialTheme.colorScheme.error)}},
+                leadingContent={Icon(Icons.Default.AccountCircle,null)},
+                trailingContent={IconButton(onClick={scopeStudentId=student.id}){Icon(Icons.Default.Edit,null)}},
+                modifier=Modifier.clickable{onSelect(student)}
+            )
+        }}
     }
-    if(show){
-        var name by rememberSaveable{mutableStateOf("")};var num by rememberSaveable{mutableStateOf("")}
-        AlertDialog(onDismissRequest={show=false},confirmButton={TextButton(enabled=name.isNotBlank(),onClick={onAdd(name,num.ifBlank{null});show=false}){Text(stringResource(R.string.continue_action))}},dismissButton={TextButton(onClick={show=false}){Text(stringResource(R.string.cancel))}},title={Text(stringResource(R.string.add_student))},text={Column(Modifier.verticalScroll(rememberScrollState()).imePadding(),verticalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(name,{name=it},label={Text(stringResource(R.string.full_name))});OutlinedTextField(num,{num=it},label={Text(stringResource(R.string.university_number))})}})
+    if(showAdd)StudentScopeDialog(
+        title=stringResource(R.string.add_student),levels=levels,batches=batches,sections=sections,groups=groups,showIdentity=true,
+        onDismiss={showAdd=false},onConfirm={name,number,level,batch,section,group->onAdd(name,number,level,batch,section,group);showAdd=false}
+    )
+    scopeStudentId?.let{id->
+        val student=students.firstOrNull{it.id==id}
+        if(student!=null)StudentScopeDialog(
+            title=student.fullName,levels=levels,batches=batches,sections=sections,groups=groups,showIdentity=false,
+            initialLevel=student.levelId.orEmpty(),initialBatch=student.batchId.orEmpty(),initialSection=student.sectionId.orEmpty(),initialGroup=student.groupId.orEmpty(),
+            onDismiss={scopeStudentId=null},onConfirm={_,_,level,batch,section,group->onUpdateScope(student.id,level,batch,section,group);scopeStudentId=null}
+        )
     }
+}
+
+@Composable private fun StudentScopeDialog(
+    title:String,levels:List<LevelEntity>,batches:List<BatchEntity>,sections:List<SectionEntity>,groups:List<GroupEntity>,showIdentity:Boolean,
+    initialLevel:String="",initialBatch:String="",initialSection:String="",initialGroup:String="",onDismiss:()->Unit,
+    onConfirm:(String,String?,String,String,String,String)->Unit
+){
+    var name by rememberSaveable{mutableStateOf("")};var number by rememberSaveable{mutableStateOf("")}
+    var levelId by rememberSaveable{mutableStateOf(initialLevel)};var batchId by rememberSaveable{mutableStateOf(initialBatch)};var sectionId by rememberSaveable{mutableStateOf(initialSection)};var groupId by rememberSaveable{mutableStateOf(initialGroup)}
+    val levelBatches=batches.filter{it.levelId==levelId};val batchSections=sections.filter{it.batchId==batchId};val sectionGroups=groups.filter{it.sectionId==sectionId}
+    val validScope=levels.any{it.id==levelId}&&levelBatches.any{it.id==batchId}&&batchSections.any{it.id==sectionId}&&sectionGroups.any{it.id==groupId}
+    AlertDialog(
+        onDismissRequest=onDismiss,
+        confirmButton={TextButton(enabled=validScope&&(!showIdentity||name.isNotBlank()),onClick={onConfirm(name,number.ifBlank{null},levelId,batchId,sectionId,groupId)}){Text(stringResource(R.string.continue_action))}},
+        dismissButton={TextButton(onClick=onDismiss){Text(stringResource(R.string.cancel))}},title={Text(title)},
+        text={Column(Modifier.verticalScroll(rememberScrollState()).imePadding(),verticalArrangement=Arrangement.spacedBy(8.dp)){
+            if(showIdentity){OutlinedTextField(name,{name=it},label={Text(stringResource(R.string.full_name))});OutlinedTextField(number,{number=it},label={Text(stringResource(R.string.university_number))})}
+            EntityChoice(stringResource(R.string.level),levelId,levels.map{it.id to it.name}){levelId=it;batchId="";sectionId="";groupId=""}
+            EntityChoice("Batch",batchId,levelBatches.map{it.id to it.name}){batchId=it;sectionId="";groupId=""}
+            EntityChoice("Section",sectionId,batchSections.map{it.id to it.name}){sectionId=it;groupId=""}
+            EntityChoice(stringResource(R.string.group),groupId,sectionGroups.map{it.id to it.name}){groupId=it}
+        }}
+    )
 }
 
 @Composable fun StudentModeScreen(student:StudentEntity?,activeLecture:LectureEntity?,devices:List<StudentDeviceEntity>,records:List<AttendanceRecordEntity>,requests:List<DeviceReplacementRequestEntity>,advertising:Boolean,presenceError:String?,pairingPayload:String?,qrPayload:String?,onEnroll:()->Unit,onRequestReplacement:()->Unit,onGenerateQr:()->Unit,onStartAdvertising:()->Unit,onStopAdvertising:()->Unit,onAppeal:(AttendanceRecordEntity)->Unit){
@@ -249,7 +295,7 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
     }
 }
 
-@Composable fun AttendanceScreen(lecture:LectureEntity?,records:List<AttendanceRecordEntity>,bleState:DetectorState,canEdit:Boolean,canApprove:Boolean,canFreeze:Boolean,onStart:()->Unit,onEnd:()->Unit,onResumeDetection:()->Unit,onTakeOver:()->Unit,onQrVerified:(String)->Unit,onEdit:(String,FinalAttendanceStatus,Double,String)->Unit,onApprove:(Boolean)->Unit){
+@Composable fun AttendanceScreen(lecture:LectureEntity?,nextLecture:LectureEntity?,records:List<AttendanceRecordEntity>,bleState:DetectorState,canStartAction:Boolean,canEnd:Boolean,canTakeOver:Boolean,canEdit:Boolean,canApprove:Boolean,canFreeze:Boolean,onStart:()->Unit,onEnd:()->Unit,onResumeDetection:()->Unit,onTakeOver:()->Unit,onQrVerified:(String)->Unit,onEdit:(String,FinalAttendanceStatus,Double,String)->Unit,onApprove:(Boolean)->Unit){
     val context=LocalContext.current
     val permissionLauncher=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){results->if(results.values.all{it})onStart()}
     val bluetoothLauncher=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){}
@@ -258,6 +304,7 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
     var editingRecordId by rememberSaveable{mutableStateOf<String?>(null)}
     val isActive=lecture?.status==LectureStatus.ACTIVE
     val isReview=lecture?.status==LectureStatus.NEEDS_REVIEW
+    val now=System.currentTimeMillis();val canStart=nextLecture!=null&&nextLecture.status in setOf(LectureStatus.READY,LectureStatus.SCHEDULED)&&nextLecture.scheduledEnd>nextLecture.scheduledStart&&now>=nextLecture.scheduledStart&&now<nextLecture.scheduledEnd
     fun startWithPermissions(){
         val required=buildList{
             if(Build.VERSION.SDK_INT>=31){add(Manifest.permission.BLUETOOTH_SCAN);add(Manifest.permission.BLUETOOTH_CONNECT)} else add(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -275,14 +322,14 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
             if(isReview)Text(stringResource(R.string.needs_review),color=MaterialTheme.colorScheme.tertiary)
         }}}
         when{
-            lecture==null->item{Button(onClick={startWithPermissions()},modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.PlayArrow,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.start_attendance))}}
+            lecture==null&&canStart&&canStartAction->item{Button(onClick={startWithPermissions()},modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.PlayArrow,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.start_attendance))}}
             isActive->{
                 if(bleState !is DetectorState.Active)item{OutlinedButton(onClick=onResumeDetection,modifier=Modifier.fillMaxWidth()){Icon(Icons.AutoMirrored.Filled.BluetoothSearching,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.resume_detection))}}
                 if(bleState is DetectorState.Error && bleState.code=="BLUETOOTH_DISABLED")item{OutlinedButton(onClick={bluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.enable_bluetooth))}}
-                item{OutlinedButton(onClick=onTakeOver,modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.take_over_attendance))}}
+                if(canTakeOver)item{OutlinedButton(onClick=onTakeOver,modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.take_over_attendance))}}
                 item{OutlinedButton(onClick={qrCamera.launch(null)},modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.QrCodeScanner,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.scan_dynamic_qr))}}
                 item{OutlinedTextField(qrText,{qrText=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.dynamic_qr_code))});Button(onClick={onQrVerified(qrText);qrText=""},enabled=qrText.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.verify_qr))}}
-                item{Button(onClick=onEnd,modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.Stop,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.end_lecture))}}
+                if(canEnd)item{Button(onClick=onEnd,modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.Stop,null);Spacer(Modifier.width(6.dp));Text(stringResource(R.string.end_lecture))}}
             }
             isReview && canApprove->{
                 val unresolved=records.any{it.finalStatus==FinalAttendanceStatus.MANUAL_REVIEW}
@@ -350,7 +397,12 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
             if(j.status==ReportJobStatus.FAILED)OutlinedButton(onClick={onRetry(j.id)},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.retry))}
         }}}
     }
-    preview?.let{r->AlertDialog(onDismissRequest=onClosePreview,title={Text(stringResource(R.string.report_preview))},text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)){Text("${r.format} • ${r.sizeBytes} B");LtrText(r.hash);if(r.format.equals("SUMMARY",true))Text(runCatching{java.io.File(r.filePath).readText().take(3000)}.getOrDefault(stringResource(R.string.preview_unavailable))) }},confirmButton={TextButton(onClick={openGenerated(r,false)}){Text(stringResource(R.string.open))}},dismissButton={Row{TextButton(onClick={openGenerated(r,true)}){Text(stringResource(R.string.share_report))};TextButton(onClick=onClosePreview){Text(stringResource(R.string.close))}}})}
+    preview?.let{r->
+        val unavailable=stringResource(R.string.preview_unavailable)
+        var summaryText by remember(r.filePath){mutableStateOf<String?>(null)}
+        LaunchedEffect(r.filePath,r.format){summaryText=if(r.format.equals("SUMMARY",true))withContext(Dispatchers.IO){runCatching{java.io.File(r.filePath).readText().take(3000)}.getOrDefault(unavailable)} else null}
+        AlertDialog(onDismissRequest=onClosePreview,title={Text(stringResource(R.string.report_preview))},text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)){Text("${r.format} • ${r.sizeBytes} B");LtrText(r.hash);if(r.format.equals("SUMMARY",true))Text(summaryText?:"") }},confirmButton={TextButton(onClick={openGenerated(r,false)}){Text(stringResource(R.string.open))}},dismissButton={Row{TextButton(onClick={openGenerated(r,true)}){Text(stringResource(R.string.share_report))};TextButton(onClick=onClosePreview){Text(stringResource(R.string.close))}}})
+    }
 }
 
 @Composable fun AttendanceAppealFormScreen(state:AppealUiState,onBack:()->Unit,onSubmit:(String,String,String?)->Unit){
@@ -433,13 +485,15 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
     }
 }
 
-@Composable fun SettingsScreen(canReviewAppeals:Boolean,canManageSettings:Boolean,canOpenManagement:Boolean,canUseAppLock:Boolean,canViewSystemHealth:Boolean,appLockConfigured:Boolean,biometricEnabled:Boolean,language:String,theme:String,academicWeekStart:String,canClaimOwnerSetup:Boolean,backendBaseUrl:String?,backendAuthMasked:String?,flags:List<FeatureFlagEntity>,systemState:DashboardState,onBackendUrl:(String)->Unit,onBackendAuth:(String)->Unit,onDeleteBackendAuth:()->Unit,onFlag:(String,Boolean)->Unit,onSetPin:(String)->Unit,onDisableLock:()->Unit,onBiometric:(Boolean)->Unit,onLanguage:(String)->Unit,onTheme:(String)->Unit,onAcademicWeekStart:(String)->Unit,onClaimOwnerSetup:()->Unit,onOpenAppeals:()->Unit,onOpenManagement:()->Unit){
+@Composable fun SettingsScreen(canReviewAppeals:Boolean,canManageSettings:Boolean,canOpenManagement:Boolean,canUseAppLock:Boolean,canViewSystemHealth:Boolean,appLockConfigured:Boolean,biometricEnabled:Boolean,language:String,theme:String,academicWeekStart:String,canClaimOwnerSetup:Boolean,backendBaseUrl:String?,syncWorkspaceId:String?,backendAuthMasked:String?,backendAccountId:String?,backendAuthState:String,backendSessionExpiresAt:Long?,flags:List<FeatureFlagEntity>,systemState:DashboardState,onBackendUrl:(String)->Unit,onSyncWorkspace:(String)->Unit,onBackendAuth:(String)->Unit,onDeleteBackendAuth:()->Unit,onProvisionBackendAccount:()->Unit,onRenewBackendSession:()->Unit,onLogoutBackendSession:()->Unit,onFlag:(String,Boolean)->Unit,onSetPin:(String)->Unit,onDisableLock:()->Unit,onBiometric:(Boolean)->Unit,onLanguage:(String)->Unit,onTheme:(String)->Unit,onAcademicWeekStart:(String)->Unit,onClaimOwnerSetup:()->Unit,onOpenAppeals:()->Unit,onOpenManagement:()->Unit){
     val context=LocalContext.current
     var backend by rememberSaveable(backendBaseUrl){mutableStateOf(backendBaseUrl.orEmpty())}
+    var syncWorkspace by rememberSaveable(syncWorkspaceId){mutableStateOf(syncWorkspaceId.orEmpty())}
     var backendToken by rememberSaveable{mutableStateOf("")}
     var newPin by rememberSaveable{mutableStateOf("")}
     var confirmOwnerSetup by rememberSaveable{mutableStateOf(false)}
-    val diagnosticsLauncher=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")){uri->uri?.let{runCatching{context.contentResolver.openOutputStream(it)?.bufferedWriter(Charsets.UTF_8)?.use{writer->writer.write(diagnosticsText(readDeviceSnapshot(context,systemState)))}}}}
+    val ioScope=rememberCoroutineScope()
+    val diagnosticsLauncher=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")){uri->uri?.let{target->ioScope.launch{withContext(Dispatchers.IO){runCatching{context.contentResolver.openOutputStream(target)?.bufferedWriter(Charsets.UTF_8)?.use{writer->writer.write(diagnosticsText(readDeviceSnapshot(context,systemState)))}}}}}}
     if(confirmOwnerSetup)AlertDialog(onDismissRequest={confirmOwnerSetup=false},title={Text(stringResource(R.string.owner_upgrade_setup))},text={Text(stringResource(R.string.owner_upgrade_confirmation))},confirmButton={TextButton(onClick={confirmOwnerSetup=false;onClaimOwnerSetup()}){Text(stringResource(R.string.confirm))}},dismissButton={TextButton(onClick={confirmOwnerSetup=false}){Text(stringResource(R.string.cancel))}})
     LazyColumn(Modifier.fillMaxSize().imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
         item{Text(stringResource(R.string.settings),style=MaterialTheme.typography.headlineMedium)}
@@ -462,8 +516,15 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
             item{Text(stringResource(R.string.backend_settings),style=MaterialTheme.typography.titleMedium)}
             item{OutlinedTextField(backend,{backend=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.backend_base_url))},supportingText={Text(stringResource(R.string.backend_url_note))})}
             item{Button(onClick={onBackendUrl(backend)},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.save))}}
+            item{OutlinedTextField(syncWorkspace,{syncWorkspace=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.sync_workspace_id))},supportingText={Text(stringResource(R.string.sync_workspace_note))},singleLine=true)}
+            item{Button(onClick={onSyncWorkspace(syncWorkspace)},enabled=syncWorkspace.isBlank()||SyncIntegrityRules.validWorkspaceId(syncWorkspace),modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.save_sync_workspace))}}
             item{OutlinedTextField(backendToken,{backendToken=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.backend_auth_token))},supportingText={Text(backendAuthMasked?.let{stringResource(R.string.backend_auth_configured,it)}?:stringResource(R.string.backend_auth_note))},singleLine=true,visualTransformation=PasswordVisualTransformation())}
             item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){Button(onClick={onBackendAuth(backendToken);backendToken=""},enabled=backendToken.isNotBlank(),modifier=Modifier.weight(1f)){Text(stringResource(R.string.add_replace_key))};if(backendAuthMasked!=null)OutlinedButton(onClick=onDeleteBackendAuth,modifier=Modifier.weight(1f)){Text(stringResource(R.string.delete_key))}}}
+            item{ListItem(headlineContent={Text(stringResource(R.string.backend_account_state))},supportingContent={Text(backendAuthState)},leadingContent={Icon(Icons.Default.CloudDone,null)})}
+            if(backendAccountId!=null)item{ListItem(headlineContent={Text(stringResource(R.string.backend_account_id))},supportingContent={LtrText(backendAccountId)},leadingContent={Icon(Icons.Default.Badge,null)})}
+            if(backendSessionExpiresAt!=null)item{ListItem(headlineContent={Text(stringResource(R.string.backend_session_expiry))},supportingContent={LtrText(backendSessionExpiresAt.toString())},leadingContent={Icon(Icons.Default.Schedule,null)})}
+            if(backendAccountId==null||backendAuthState=="PROVISIONING_REQUIRED")item{Button(onClick=onProvisionBackendAccount,enabled=backendAuthMasked!=null&&backend.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.provision_backend_account))}}
+            if(backendAccountId!=null&&backendAuthState!="PROVISIONING_REQUIRED")item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){Button(onClick=onRenewBackendSession,modifier=Modifier.weight(1f)){Text(stringResource(R.string.renew_backend_session))};OutlinedButton(onClick=onLogoutBackendSession,modifier=Modifier.weight(1f)){Text(stringResource(R.string.logout_backend_session))}}}
             item{Text(stringResource(R.string.feature_flags),style=MaterialTheme.typography.titleMedium)}
             items(flags,key={it.code}){flag->ListItem(headlineContent={Text(flag.code)},trailingContent={Switch(checked=flag.enabled,onCheckedChange={onFlag(flag.code,it)})})}
         }
@@ -477,7 +538,7 @@ private fun diagnosticsText(d:DeviceSnapshot)=buildString{
 enum class AdminOpsSection{USERS,ACADEMIC,TEACHERS,SUBJECTS,TIMETABLE,REPORTS,AI,DATA}
 
 @Composable fun AdminOperationsScreen(
-    permissions:Set<String>,universities:List<UniversityEntity>,faculties:List<FacultyEntity>,departments:List<DepartmentEntity>,years:List<AcademicYearEntity>,semesters:List<SemesterEntity>,levels:List<LevelEntity>,batches:List<BatchEntity>,sections:List<SectionEntity>,groups:List<GroupEntity>,teachers:List<TeacherEntity>,subjects:List<SubjectEntity>,versions:List<WeeklyTimetableVersionEntity>,review:com.hammam.attendai.data.repository.TimetableRepository.DraftReview?,onBack:()->Unit,adminVm:AdminOperationsViewModel
+    permissions:Set<String>,universities:List<UniversityEntity>,faculties:List<FacultyEntity>,departments:List<DepartmentEntity>,years:List<AcademicYearEntity>,semesters:List<SemesterEntity>,levels:List<LevelEntity>,batches:List<BatchEntity>,sections:List<SectionEntity>,groups:List<GroupEntity>,teachers:List<TeacherEntity>,subjects:List<SubjectEntity>,attendancePolicies:List<AttendancePolicyEntity>,versions:List<WeeklyTimetableVersionEntity>,review:com.hammam.attendai.data.repository.TimetableRepository.DraftReview?,onBack:()->Unit,adminVm:AdminOperationsViewModel
 ){
     var section by rememberSaveable{mutableStateOf(AdminOpsSection.ACADEMIC)}
     val available=buildList{
@@ -498,7 +559,7 @@ enum class AdminOpsSection{USERS,ACADEMIC,TEACHERS,SUBJECTS,TIMETABLE,REPORTS,AI
             AdminOpsSection.USERS->UserAccessPane(permissions,adminVm)
             AdminOpsSection.ACADEMIC->AcademicStructurePane(permissions,universities,faculties,departments,years,semesters,levels,batches,sections,groups,adminVm)
             AdminOpsSection.TEACHERS->TeachersManagementPane(permissions,teachers,adminVm)
-            AdminOpsSection.SUBJECTS->SubjectsManagementPane(permissions,subjects,teachers,levels,semesters,groups,adminVm)
+            AdminOpsSection.SUBJECTS->SubjectsManagementPane(permissions,subjects,teachers,levels,semesters,groups,attendancePolicies,adminVm)
             AdminOpsSection.TIMETABLE->TimetableManagementPane(permissions,groups,teachers,subjects,versions,review,adminVm)
             AdminOpsSection.REPORTS->ReportSettingsPane(permissions,teachers,subjects,adminVm)
             AdminOpsSection.AI->AiProvidersPane(permissions,adminVm)
@@ -563,11 +624,24 @@ enum class AdminOpsSection{USERS,ACADEMIC,TEACHERS,SUBJECTS,TIMETABLE,REPORTS,AI
     }
 }
 
-@Composable private fun SubjectsManagementPane(permissions:Set<String>,subjects:List<SubjectEntity>,teachers:List<TeacherEntity>,levels:List<LevelEntity>,semesters:List<SemesterEntity>,groups:List<GroupEntity>,vm:AdminOperationsViewModel){
-    var code by rememberSaveable{mutableStateOf("")};var name by rememberSaveable{mutableStateOf("")};var teacher by rememberSaveable{mutableStateOf("")};var level by rememberSaveable{mutableStateOf("")};var semester by rememberSaveable{mutableStateOf("")};var group by rememberSaveable{mutableStateOf("")};var reason by rememberSaveable{mutableStateOf("Administrative archive")}
+@Composable private fun SubjectsManagementPane(permissions:Set<String>,subjects:List<SubjectEntity>,teachers:List<TeacherEntity>,levels:List<LevelEntity>,semesters:List<SemesterEntity>,groups:List<GroupEntity>,policies:List<AttendancePolicyEntity>,vm:AdminOperationsViewModel){
+    var code by rememberSaveable{mutableStateOf("")};var name by rememberSaveable{mutableStateOf("")};var teacher by rememberSaveable{mutableStateOf("")};var level by rememberSaveable{mutableStateOf("")};var semester by rememberSaveable{mutableStateOf("")};var group by rememberSaveable{mutableStateOf("")};var policy by rememberSaveable{mutableStateOf("")};var reason by rememberSaveable{mutableStateOf("Administrative archive")}
+    var policyName by rememberSaveable{mutableStateOf("")};var full by rememberSaveable{mutableStateOf("0.85")};var partial by rememberSaveable{mutableStateOf("0.50")};var late by rememberSaveable{mutableStateOf("10")};var early by rememberSaveable{mutableStateOf("10")};var absence by rememberSaveable{mutableStateOf("0.20")};var grace by rememberSaveable{mutableStateOf("120")};var minimum by rememberSaveable{mutableStateOf("300")};var confidence by rememberSaveable{mutableStateOf("0.60")};var editPolicySubject by rememberSaveable{mutableStateOf("")};var editPolicy by rememberSaveable{mutableStateOf("")}
+    val policyValuesValid=full.toDoubleOrNull()!=null&&partial.toDoubleOrNull()!=null&&late.toIntOrNull()!=null&&early.toIntOrNull()!=null&&absence.toDoubleOrNull()!=null&&grace.toLongOrNull()!=null&&minimum.toLongOrNull()!=null&&confidence.toDoubleOrNull()!=null
     LazyColumn(Modifier.fillMaxSize().imePadding().padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
-        if("MANAGE_SUBJECTS" in permissions){item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(code,{code=it},Modifier.weight(1f),label={Text(stringResource(R.string.code))});OutlinedTextField(name,{name=it},Modifier.weight(2f),label={Text(stringResource(R.string.name))})}};item{EntityChoice(stringResource(R.string.teacher),teacher,teachers.map{it.id to it.fullName}){teacher=it}};item{EntityChoice(stringResource(R.string.level),level,levels.map{it.id to it.name}){level=it}};item{EntityChoice(stringResource(R.string.semester),semester,semesters.map{it.id to it.name}){semester=it}};item{EntityChoice(stringResource(R.string.group),group,groups.map{it.id to it.name}){group=it}};item{Button(onClick={vm.addSubject(code,name,teacher,level,semester,group,null)},enabled=listOf(code,name,teacher,level,semester,group).all{it.isNotBlank()},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.add_subject))}};item{OutlinedTextField(reason,{reason=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.reason))})}}
-        items(subjects,key={it.id}){sub->ListItem(headlineContent={Text(sub.name)},supportingContent={LtrText(sub.code)},trailingContent={if("MANAGE_SUBJECTS" in permissions)TextButton(onClick={vm.archiveSubject(sub.id,reason)},enabled=reason.isNotBlank()){Text(stringResource(R.string.archive))}})}
+        if("MANAGE_SUBJECTS" in permissions){
+            item{Text("Attendance policies",style=MaterialTheme.typography.titleMedium)}
+            item{OutlinedTextField(policyName,{policyName=it},Modifier.fillMaxWidth(),label={Text("Policy name")})}
+            item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(full,{full=it},Modifier.weight(1f),label={Text("Full")});OutlinedTextField(partial,{partial=it},Modifier.weight(1f),label={Text("Partial")});OutlinedTextField(absence,{absence=it},Modifier.weight(1f),label={Text("Absence")})}}
+            item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(late,{late=it},Modifier.weight(1f),label={Text("Late min")});OutlinedTextField(early,{early=it},Modifier.weight(1f),label={Text("Early min")});OutlinedTextField(confidence,{confidence=it},Modifier.weight(1f),label={Text("Confidence")})}}
+            item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(grace,{grace=it},Modifier.weight(1f),label={Text("Grace sec")});OutlinedTextField(minimum,{minimum=it},Modifier.weight(1f),label={Text("Verify sec")})}}
+            item{Button(onClick={vm.addAttendancePolicy(policyName,full.toDouble(),partial.toDouble(),late.toInt(),early.toInt(),absence.toDouble(),grace.toLong(),minimum.toLong(),confidence.toDouble())},enabled=policyName.isNotBlank()&&policyValuesValid,modifier=Modifier.fillMaxWidth()){Text("Add attendance policy")}}
+            item{HorizontalDivider();Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(code,{code=it},Modifier.weight(1f),label={Text(stringResource(R.string.code))});OutlinedTextField(name,{name=it},Modifier.weight(2f),label={Text(stringResource(R.string.name))})}}
+            item{EntityChoice(stringResource(R.string.teacher),teacher,teachers.map{it.id to it.fullName}){teacher=it}};item{EntityChoice(stringResource(R.string.level),level,levels.map{it.id to it.name}){level=it}};item{EntityChoice(stringResource(R.string.semester),semester,semesters.map{it.id to it.name}){semester=it}};item{EntityChoice(stringResource(R.string.group),group,groups.map{it.id to it.name}){group=it}};item{EntityChoice("Attendance policy",policy,policies.map{it.id to it.name}){policy=it}}
+            item{Button(onClick={vm.addSubject(code,name,teacher,level,semester,group,policy)},enabled=listOf(code,name,teacher,level,semester,group,policy).all{it.isNotBlank()},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.add_subject))}};item{OutlinedTextField(reason,{reason=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.reason))})}
+            if(subjects.any{it.attendancePolicyId==null||policies.none{p->p.id==it.attendancePolicyId}}){item{HorizontalDivider();Text("Subjects requiring attendance policy",style=MaterialTheme.typography.titleMedium)};item{EntityChoice("Subject",editPolicySubject,subjects.filter{it.attendancePolicyId==null||policies.none{p->p.id==it.attendancePolicyId}}.map{it.id to it.name}){editPolicySubject=it;editPolicy=""}};item{EntityChoice("Attendance policy",editPolicy,policies.map{it.id to it.name}){editPolicy=it}};item{Button(onClick={vm.updateSubjectAttendancePolicy(editPolicySubject,editPolicy)},enabled=editPolicySubject.isNotBlank()&&editPolicy.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text("Assign attendance policy")}}}
+        }
+        items(subjects,key={it.id}){sub->ListItem(headlineContent={Text(sub.name)},supportingContent={Text(listOf(sub.code,policies.firstOrNull{it.id==sub.attendancePolicyId}?.name?:"Attendance policy required").joinToString(" • "))},trailingContent={if("MANAGE_SUBJECTS" in permissions)TextButton(onClick={vm.archiveSubject(sub.id,reason)},enabled=reason.isNotBlank()){Text(stringResource(R.string.archive))}})}
     }
 }
 
@@ -576,8 +650,11 @@ enum class AdminOpsSection{USERS,ACADEMIC,TEACHERS,SUBJECTS,TIMETABLE,REPORTS,AI
     var group by rememberSaveable{mutableStateOf("")};var weekStart by rememberSaveable{mutableStateOf("")};var approvalReason by rememberSaveable{mutableStateOf("")}
     var editRows by remember{mutableStateOf<List<com.hammam.attendai.data.repository.TimetableRepository.DraftRow>>(emptyList())}
     LaunchedEffect(review?.version?.id,review?.rows){val r=review;editRows=r?.rows?.map{com.hammam.attendai.data.repository.TimetableRepository.DraftRow(it.dayOfWeek,it.subjectId,it.teacherId,it.startTime,it.endTime,it.room,it.lectureType,it.scheduleKind)}?:emptyList()}
+    val persistedReviewRows=review?.rows?.map{com.hammam.attendai.data.repository.TimetableRepository.DraftRow(it.dayOfWeek,it.subjectId,it.teacherId,it.startTime,it.endTime,it.room,it.lectureType,it.scheduleKind)}?:emptyList()
+    val hasUnsavedReviewChanges=review!=null&&editRows!=persistedReviewRows
     val fileLauncher=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){uri->if(uri!=null&&group.isNotBlank()&&weekStart.isNotBlank()){runCatching{context.contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)};vm.importDocument(group,weekStart,uri,context.contentResolver.getType(uri))}}
-    val camera=rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()){bitmap->if(bitmap!=null&&group.isNotBlank()&&weekStart.isNotBlank()){val dir=java.io.File(context.filesDir,"timetable_imports").apply{mkdirs()};val f=java.io.File(dir,"capture-${System.currentTimeMillis()}.jpg");f.outputStream().use{bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,90,it)};vm.importCameraImage(group,weekStart,android.net.Uri.fromFile(f))}}
+    val cameraIoScope=rememberCoroutineScope()
+    val camera=rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()){bitmap->if(bitmap!=null&&group.isNotBlank()&&weekStart.isNotBlank()){val selectedGroup=group;val selectedWeekStart=weekStart;cameraIoScope.launch{val f=withContext(Dispatchers.IO){val dir=java.io.File(context.filesDir,"timetable_imports").apply{mkdirs()};java.io.File(dir,"capture-${System.currentTimeMillis()}.jpg").also{file->file.outputStream().use{bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,90,it)}}};vm.importCameraImage(selectedGroup,selectedWeekStart,android.net.Uri.fromFile(f))}}}
     LazyColumn(Modifier.fillMaxSize().imePadding().padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
         item{EntityChoice(stringResource(R.string.group),group,groups.map{it.id to it.name}){group=it;vm.selectGroup(it)}}
         item{OutlinedTextField(weekStart,{weekStart=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.week_start_hint))})}
@@ -585,7 +662,7 @@ enum class AdminOpsSection{USERS,ACADEMIC,TEACHERS,SUBJECTS,TIMETABLE,REPORTS,AI
         items(versions,key={it.id}){v->ListItem(headlineContent={Text("${v.weekStart} • v${v.versionNumber}")},supportingContent={Text("${v.status} • ${v.sourceType}")},modifier=Modifier.clickable{vm.loadReview(v.id)})}
         review?.let{r->item{HorizontalDivider();Text("${stringResource(R.string.review)} • ${r.version.status}",style=MaterialTheme.typography.titleMedium);r.issues.forEach{Text("${it.code}: ${it.message}",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}}
             items(editRows.size){index->val row=editRows[index];Card{Column(Modifier.fillMaxWidth().padding(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){OutlinedTextField(row.dayOfWeek.toString(),{v->editRows=editRows.toMutableList().also{it[index]=row.copy(dayOfWeek=v.toIntOrNull()?:0)}},Modifier.weight(1f),label={Text(stringResource(R.string.day))});OutlinedTextField(row.startTime,{v->editRows=editRows.toMutableList().also{it[index]=row.copy(startTime=v)}},Modifier.weight(1f),label={Text(stringResource(R.string.start_time))});OutlinedTextField(row.endTime,{v->editRows=editRows.toMutableList().also{it[index]=row.copy(endTime=v)}},Modifier.weight(1f),label={Text(stringResource(R.string.end_time))})};EntityChoice(stringResource(R.string.subject),row.subjectId,subjects.filter{it.groupId==r.version.groupId}.map{it.id to it.name}){v->editRows=editRows.toMutableList().also{it[index]=row.copy(subjectId=v)}};EntityChoice(stringResource(R.string.teacher),row.teacherId,teachers.map{it.id to it.fullName}){v->editRows=editRows.toMutableList().also{it[index]=row.copy(teacherId=v)}};OutlinedTextField(row.room.orEmpty(),{v->editRows=editRows.toMutableList().also{it[index]=row.copy(room=v)}},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.room))});TextButton({editRows=editRows.toMutableList().also{it.removeAt(index)}}){Text(stringResource(R.string.remove))}}}}
-            if("MANAGE_TIMETABLE" in permissions){item{OutlinedButton(onClick={editRows=editRows+com.hammam.attendai.data.repository.TimetableRepository.DraftRow(1,subjects.firstOrNull{it.groupId==r.version.groupId}?.id.orEmpty(),teachers.firstOrNull()?.id.orEmpty(),"08:00","09:00",null)},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.add_row))}};item{Button(onClick={vm.saveRows(r.version.id,editRows)},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.save_review))}};item{OutlinedTextField(approvalReason,{approvalReason=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.approval_reason))})};item{Button(onClick={vm.approve(r.version.id,approvalReason)},enabled=r.issues.isEmpty()&&approvalReason.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.approve_timetable))}}}
+            if("MANAGE_TIMETABLE" in permissions){item{OutlinedButton(onClick={editRows=editRows+com.hammam.attendai.data.repository.TimetableRepository.DraftRow(1,subjects.firstOrNull{it.groupId==r.version.groupId}?.id.orEmpty(),teachers.firstOrNull()?.id.orEmpty(),"08:00","09:00",null)},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.add_row))}};item{Button(onClick={vm.saveRows(r.version.id,editRows)},modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.save_review))}};item{OutlinedTextField(approvalReason,{approvalReason=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.approval_reason))})};item{Button(onClick={vm.approve(r.version.id,approvalReason)},enabled=r.issues.isEmpty()&&!hasUnsavedReviewChanges&&approvalReason.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.approve_timetable))}}}
         }
     }
 }
@@ -631,20 +708,20 @@ enum class AdminOpsSection{USERS,ACADEMIC,TEACHERS,SUBJECTS,TIMETABLE,REPORTS,AI
         item{EntityChoice(stringResource(R.string.subject),subject,listOf("" to stringResource(R.string.all_subjects))+subjects.filter{teacher.isBlank()||it.teacherId==teacher}.map{it.id to it.name}){subject=it}}
         item{Row(verticalAlignment=Alignment.CenterVertically){Switch(enabled,{enabled=it});Spacer(Modifier.width(8.dp));Text(stringResource(R.string.enabled))}}
         item{Text(stringResource(R.string.report_frequency),style=MaterialTheme.typography.titleMedium)}
-        item{FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){FilterChip(selected=daily,onClick={daily=!daily},label={Text(stringResource(R.string.daily))});FilterChip(selected=weekly,onClick={weekly=!weekly},label={Text(stringResource(R.string.weekly))});FilterChip(selected=monthly,onClick={monthly=!monthly},label={Text(stringResource(R.string.monthly))});FilterChip(selected=semester,onClick={semester=!semester},label={Text(stringResource(R.string.end_of_semester))});FilterChip(selected=custom,onClick={custom=!custom},label={Text(stringResource(R.string.custom))})}}
+        item{FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){FilterChip(selected=daily,onClick={daily=!daily},label={Text(stringResource(R.string.daily))});FilterChip(selected=weekly,onClick={weekly=!weekly},label={Text(stringResource(R.string.weekly))});FilterChip(selected=monthly,onClick={monthly=!monthly},label={Text(stringResource(R.string.monthly))});FilterChip(selected=semester,onClick={semester=!semester},label={Text(stringResource(R.string.end_of_semester))});FilterChip(selected=false,onClick={},enabled=false,label={Text(stringResource(R.string.custom))})}}
         item{OutlinedTextField(sendTime,{sendTime=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.send_time))})}
         if(weekly)item{OutlinedTextField(weeklyDay,{weeklyDay=it.filter(Char::isDigit)},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.weekly_day))})}
         if(monthly)item{OutlinedTextField(monthlyDay,{monthlyDay=it.filter(Char::isDigit)},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.monthly_day))})}
         item{OutlinedTextField(timezone,{timezone=it},Modifier.fillMaxWidth(),label={Text(stringResource(R.string.timezone))})}
         item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Box(Modifier.weight(1f)){ChoiceDropdown(stringResource(R.string.channel),channel,listOf("EMAIL","WHATSAPP")){channel=it}};Box(Modifier.weight(1f)){ChoiceDropdown(stringResource(R.string.format),format,listOf("PDF","CSV","SUMMARY")){format=it}}}}
-        item{BooleanSetting(stringResource(R.string.include_student_details),details){details=it};BooleanSetting(stringResource(R.string.require_approval),approval){approval=it};BooleanSetting(stringResource(R.string.ai_summary),ai){ai=it};BooleanSetting(stringResource(R.string.send_if_no_lecture),noLecture){noLecture=it}}
-        if("MANAGE_REPORT_SETTINGS" in permissions)item{Button(onClick={val f=buildSet{if(daily)add("DAILY");if(weekly)add("WEEKLY");if(monthly)add("MONTHLY");if(semester)add("END_OF_SEMESTER");if(custom)add("CUSTOM")};vm.saveReportSetting(teacher,subject.ifBlank{null},enabled,f,sendTime,weeklyDay.toIntOrNull(),monthlyDay.toIntOrNull(),timezone,channel,format,details,approval,ai,noLecture)},enabled=teacher.isNotBlank()&&(daily||weekly||monthly||semester||custom),modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.save))}}
+        item{BooleanSetting(stringResource(R.string.include_student_details),details){details=it};BooleanSetting(stringResource(R.string.require_approval),approval){approval=it};BooleanSetting(stringResource(R.string.ai_summary),false,enabled=false){ai=false};BooleanSetting(stringResource(R.string.send_if_no_lecture),noLecture){noLecture=it}}
+        if("MANAGE_REPORT_SETTINGS" in permissions)item{Button(onClick={val f=buildSet{if(daily)add("DAILY");if(weekly)add("WEEKLY");if(monthly)add("MONTHLY");if(semester)add("END_OF_SEMESTER");/* CUSTOM is intentionally not persisted until executable scheduling exists. */};vm.saveReportSetting(teacher,subject.ifBlank{null},enabled,f,sendTime,weeklyDay.toIntOrNull(),monthlyDay.toIntOrNull(),timezone,channel,format,details,approval,ai,noLecture)},enabled=teacher.isNotBlank()&&(daily||weekly||monthly||semester),modifier=Modifier.fillMaxWidth()){Text(stringResource(R.string.save))}}
         item{HorizontalDivider();Text(stringResource(R.string.saved_settings),style=MaterialTheme.typography.titleMedium)}
         items(saved,key={it.id}){r->val tn=teachers.firstOrNull{it.id==r.teacherId}?.fullName?:r.teacherId;val sn=r.subjectId?.let{id->subjects.firstOrNull{it.id==id}?.name}?:stringResource(R.string.all_subjects);ListItem(headlineContent={Text("$tn • $sn")},supportingContent={Text("${r.frequency} • ${r.channel} • ${r.reportFormat} • ${if(r.requireApproval)"APPROVAL" else "AUTO"}")})}
     }
 }
 
-@Composable private fun BooleanSetting(label:String,value:Boolean,onValue:(Boolean)->Unit){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text(label,Modifier.weight(1f));Switch(value,onValue)}}
+@Composable private fun BooleanSetting(label:String,value:Boolean,enabled:Boolean=true,onValue:(Boolean)->Unit){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text(label,Modifier.weight(1f));Switch(value,onCheckedChange=onValue,enabled=enabled)}}
 
 @Composable private fun EntityChoice(label:String,value:String,options:List<Pair<String,String>>,onSelect:(String)->Unit){
     var expanded by remember{mutableStateOf(false)};val shown=options.firstOrNull{it.first==value}?.second?:stringResource(R.string.select_value)

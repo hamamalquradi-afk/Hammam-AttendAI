@@ -5,12 +5,17 @@ import com.hammam.attendai.data.local.HammamDatabase
 import com.hammam.attendai.data.local.entity.*
 import com.hammam.attendai.data.settings.AppPreferences
 import com.hammam.attendai.domain.model.SemesterStatus
+import com.hammam.attendai.security.KeystoreCipher
+import com.hammam.attendai.sync.AcademicHierarchySyncOutbox
+import com.hammam.attendai.sync.AcademicReferenceSyncOutbox
 import kotlinx.coroutines.flow.first
 import java.io.File
 import android.util.Base64
 
 /** Non-secret configuration bundle. It deliberately excludes users, students, attendance history and provider secrets. */
-class ConfigurationBackupManager(private val db:HammamDatabase,private val preferences:AppPreferences){
+class ConfigurationBackupManager(private val db:HammamDatabase,private val preferences:AppPreferences,cipher:KeystoreCipher?=null){
+    private val hierarchySyncOutbox=cipher?.let{AcademicHierarchySyncOutbox(db,it)}
+    private val referenceSyncOutbox=cipher?.let{AcademicReferenceSyncOutbox(db,it)}
     data class Preview(val valid:Boolean,val policies:Int,val reportSettings:Int,val featureFlags:Int,val rolePermissions:Int,val academicYears:Int,val semesters:Int,val issues:List<String>)
     private val dao=db.coreDao()
     private fun e(v:String?)=Base64.encodeToString((v?:"").toByteArray(Charsets.UTF_8),Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
@@ -38,12 +43,12 @@ class ConfigurationBackupManager(private val db:HammamDatabase,private val prefe
     suspend fun importConfirmed(source:File){
         val check=preview(source);require(check.valid){check.issues.joinToString(",")};val lines=source.readLines(Charsets.UTF_8);var ui:Pair<String,String>?=null
         db.withTransaction{lines.drop(1).forEach{line->val p=line.split('|');when(p.firstOrNull()){
-            "POLICY"->{val v=p.drop(1).map(::d);dao.upsertAttendancePolicy(AttendancePolicyEntity(v[0],v[1],v[2],v[3].ifBlank{null},v[4].toDouble(),v[5].toDouble(),v[6].toInt(),v[7].toInt(),v[8].toDouble(),v[9].toLong(),v[10].toLong(),v[11].toDouble(),v[12].toLong(),v[13].toLong(),v[14].toLong()))}
+            "POLICY"->{val v=p.drop(1).map(::d);val row=AttendancePolicyEntity(v[0],v[1],v[2],v[3].ifBlank{null},v[4].toDouble(),v[5].toDouble(),v[6].toInt(),v[7].toInt(),v[8].toDouble(),v[9].toLong(),v[10].toLong(),v[11].toDouble(),v[12].toLong(),v[13].toLong(),v[14].toLong());dao.upsertAttendancePolicy(row);referenceSyncOutbox?.enqueueAttendancePolicyIfEnabled(row)}
             "REPORT"->{val v=p.drop(1).map(::d);dao.upsertTeacherReportSetting(TeacherReportSettingEntity(v[0],v[1],v[2].ifBlank{null},v[3].toBoolean(),v[4],v[5],v[6].toIntOrNull(),v[7].toIntOrNull(),v[8].toBoolean(),v[9].ifBlank{null},v[10],v[11],v[12],v[13].toBoolean(),v[14].toBoolean(),v[15].toBoolean(),v[16].toBoolean(),v[17].toLong(),v[18].toLong()))}
             "FLAG"->{val v=p.drop(1).map(::d);dao.upsertFeatureFlag(FeatureFlagEntity(v[0],v[1],v[2].toBoolean(),v[3].toLong()))}
             "ROLEPERM"->{val role=dao.getRoleIdByName(d(p[1]));val perm=dao.getPermissionIdByCode(d(p[2]));if(role!=null&&perm!=null)dao.insertRolePermission(RolePermissionEntity(role,perm))}
-            "YEAR"->{val v=p.drop(1).map(::d);val row=AcademicYearEntity(v[0],v[1],v[2],v[3],v[4].toBoolean());if(dao.getAcademicYearById(row.id)==null)dao.insertAcademicYear(row) else dao.updateAcademicYear(row)}
-            "SEMESTER"->{val v=p.drop(1).map(::d);val row=SemesterEntity(v[0],v[1],v[2],v[3],v[4],SemesterStatus.valueOf(v[5]),v[6].toLong(),v[7].toLong());if(dao.getSemesterById(row.id)==null)dao.insertSemester(row) else dao.updateSemester(row)}
+            "YEAR"->{val v=p.drop(1).map(::d);val start=java.time.LocalDate.parse(v[2]);val end=java.time.LocalDate.parse(v[3]);require(!end.isBefore(start)){"ACADEMIC_YEAR_DATE_RANGE_INVALID"};val row=AcademicYearEntity(v[0],v[1],v[2],v[3],v[4].toBoolean());if(dao.getAcademicYearById(row.id)==null)dao.insertAcademicYear(row) else dao.updateAcademicYear(row);hierarchySyncOutbox?.recordAcademicYear(row)}
+            "SEMESTER"->{val v=p.drop(1).map(::d);val year=dao.getAcademicYearById(v[2])?:error("ACADEMIC_YEAR_NOT_FOUND");val start=java.time.LocalDate.parse(v[3]);val end=java.time.LocalDate.parse(v[4]);val yearStart=java.time.LocalDate.parse(year.startDate);val yearEnd=java.time.LocalDate.parse(year.endDate);require(!end.isBefore(start)&&!start.isBefore(yearStart)&&!end.isAfter(yearEnd)){"SEMESTER_OUTSIDE_ACADEMIC_YEAR"};val row=SemesterEntity(v[0],v[1],v[2],v[3],v[4],SemesterStatus.valueOf(v[5]),v[6].toLong(),v[7].toLong());if(dao.getSemesterById(row.id)==null)dao.insertSemester(row) else dao.updateSemester(row);hierarchySyncOutbox?.recordSemester(row)}
             "UI"->ui=d(p[1]) to d(p[2])
         }}}
         ui?.let{preferences.setLanguage(it.first);preferences.setTheme(it.second)}

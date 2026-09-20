@@ -17,7 +17,7 @@ android {
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
-        buildConfigField("int", "DATABASE_VERSION", "4")
+        buildConfigField("int", "DATABASE_VERSION", "5")
     }
 
     signingConfigs {

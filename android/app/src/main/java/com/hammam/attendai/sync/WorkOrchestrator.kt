@@ -9,7 +9,7 @@ object WorkOrchestrator {
         val network=Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
         val sync=PeriodicWorkRequestBuilder<SyncWorker>(1,TimeUnit.HOURS).setConstraints(network).setBackoffCriteria(BackoffPolicy.EXPONENTIAL,15,TimeUnit.MINUTES).build()
         val notifications=PeriodicWorkRequestBuilder<NotificationWorker>(1,TimeUnit.HOURS).setConstraints(network).setBackoffCriteria(BackoffPolicy.EXPONENTIAL,15,TimeUnit.MINUTES).build()
-        val reports=PeriodicWorkRequestBuilder<ReportWorker>(1,TimeUnit.HOURS).setBackoffCriteria(BackoffPolicy.EXPONENTIAL,15,TimeUnit.MINUTES).build()
+        val reports=PeriodicWorkRequestBuilder<ReportWorker>(1,TimeUnit.HOURS).setConstraints(network).setBackoffCriteria(BackoffPolicy.EXPONENTIAL,15,TimeUnit.MINUTES).build()
         val lectures=PeriodicWorkRequestBuilder<LectureMaterializationWorker>(6,TimeUnit.HOURS).build()
         val timetableReminder=PeriodicWorkRequestBuilder<TimetableReminderWorker>(24,TimeUnit.HOURS).build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork("hammam_sync",ExistingPeriodicWorkPolicy.KEEP,sync)
@@ -26,7 +26,8 @@ object WorkOrchestrator {
         WorkManager.getInstance(context).enqueueUniqueWork("hammam_notifications_now",ExistingWorkPolicy.KEEP,notifications)
     }
     fun kickReports(context:Context){
-        val req=OneTimeWorkRequestBuilder<ReportWorker>().build()
-        WorkManager.getInstance(context).enqueueUniqueWork("hammam_reports_now",ExistingWorkPolicy.REPLACE,req)
+        val constraints=Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+        val req=OneTimeWorkRequestBuilder<ReportWorker>().setConstraints(constraints).build()
+        WorkManager.getInstance(context).enqueueUniqueWork("hammam_reports_now",ExistingWorkPolicy.KEEP,req)
     }
 }

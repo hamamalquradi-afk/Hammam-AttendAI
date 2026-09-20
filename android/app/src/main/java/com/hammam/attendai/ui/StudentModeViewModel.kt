@@ -48,28 +48,33 @@ class StudentModeViewModel(app:Application):AndroidViewModel(app){
         runCatching{container.devices.requestReplacement(s.id,actor)}.onSuccess{_message.value="DEVICE_REPLACEMENT_REQUESTED"}.onFailure{_message.value=it.message?:"DEVICE_REPLACEMENT_FAILED"}
     }}
     fun generateQrFallback(){viewModelScope.launch{
+        if(dao.isFeatureEnabled("QR_ATTENDANCE")!=true){_message.value="QR_ATTENDANCE_DISABLED";return@launch}
         val s=student.value?:run{_message.value="STUDENT_PROFILE_NOT_LINKED";return@launch};if(activeLecture.value?.groupId!=s.groupId){_message.value="NO_ACTIVE_LECTURE";return@launch}
-        val device=devices.value.firstOrNull{it.status.name=="ACTIVE"}?:run{_message.value="ACTIVE_DEVICE_REQUIRED";return@launch}
+        val device=devices.value.firstOrNull{it.status.name=="ACTIVE"&&s.registeredDeviceId==it.id}?:run{_message.value="ACTIVE_DEVICE_REQUIRED";return@launch}
+        if(dao.getAttendanceRecord(activeLecture.value!!.id,s.id)==null){_message.value="STUDENT_NOT_IN_ATTENDANCE_ROSTER";return@launch}
         val token=container.devices.rotatingToken(device.id)?:run{_message.value="QR_TOKEN_FAILED";return@launch};_qrPayload.value="HAD1|$token"
     }}
 
-    fun startAdvertising(){
-        if(StudentPresenceService.active.value)return
-        val s=student.value?:run{_message.value="STUDENT_PROFILE_NOT_LINKED";return}
-        val lecture=activeLecture.value?:run{_message.value="NO_ACTIVE_LECTURE";return}
-        if(lecture.groupId!=s.groupId){_message.value="LECTURE_OUT_OF_SCOPE";return}
-        val device=devices.value.firstOrNull{it.status.name=="ACTIVE"}?:run{_message.value="ACTIVE_DEVICE_REQUIRED";return}
+    fun startAdvertising(){viewModelScope.launch{
+        if(StudentPresenceService.active.value)return@launch
+        if(dao.isFeatureEnabled("BLE_ATTENDANCE")!=true){_message.value="BLE_ATTENDANCE_DISABLED";return@launch}
+        val s=student.value?:run{_message.value="STUDENT_PROFILE_NOT_LINKED";return@launch}
+        val lecture=activeLecture.value?:run{_message.value="NO_ACTIVE_LECTURE";return@launch}
+        if(lecture.groupId!=s.groupId){_message.value="LECTURE_OUT_OF_SCOPE";return@launch}
+        if(dao.getAttendanceRecord(lecture.id,s.id)==null){_message.value="STUDENT_NOT_IN_ATTENDANCE_ROSTER";return@launch}
+        val device=devices.value.firstOrNull{it.status.name=="ACTIVE"&&s.registeredDeviceId==it.id}?:run{_message.value="ACTIVE_DEVICE_REQUIRED";return@launch}
         if(Build.VERSION.SDK_INT>=31){
-            if(ContextCompat.checkSelfPermission(appContext,Manifest.permission.BLUETOOTH_ADVERTISE)!=PackageManager.PERMISSION_GRANTED||ContextCompat.checkSelfPermission(appContext,Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED){_message.value="BLE_PERMISSION_REQUIRED";return}
+            if(ContextCompat.checkSelfPermission(appContext,Manifest.permission.BLUETOOTH_ADVERTISE)!=PackageManager.PERMISSION_GRANTED||ContextCompat.checkSelfPermission(appContext,Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED){_message.value="BLE_PERMISSION_REQUIRED";return@launch}
         }
         val ready=runCatching{val adapter=(appContext.getSystemService(android.content.Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter;adapter!=null&&adapter.isEnabled&&adapter.bluetoothLeAdvertiser!=null}.getOrDefault(false)
-        if(!ready){_message.value="BLE_ADVERTISE_UNAVAILABLE";return}
+        if(!ready){_message.value="BLE_ADVERTISE_UNAVAILABLE";return@launch}
         val intent=Intent(appContext,StudentPresenceService::class.java)
             .putExtra(StudentPresenceService.EXTRA_STUDENT_ID,s.id)
             .putExtra(StudentPresenceService.EXTRA_DEVICE_ID,device.id)
             .putExtra(StudentPresenceService.EXTRA_LECTURE_ID,lecture.id)
         if(runCatching{ContextCompat.startForegroundService(appContext,intent)}.isFailure)_message.value="PRESENCE_SERVICE_START_FAILED"
-    }
+    }}
+
     fun stopAdvertising(){appContext.stopService(Intent(appContext,StudentPresenceService::class.java))}
     fun clearMessage(){_message.value=null}
 }

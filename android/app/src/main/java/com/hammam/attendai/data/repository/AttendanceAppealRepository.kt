@@ -6,7 +6,9 @@ import com.hammam.attendai.data.local.entity.*
 import com.hammam.attendai.data.local.dao.AppealReviewRow
 import com.hammam.attendai.domain.model.*
 import com.hammam.attendai.security.KeystoreCipher
+import com.hammam.attendai.sync.AcademicGraphSyncOutbox
 import com.hammam.attendai.security.AuthorizationRepository
+import com.hammam.attendai.sync.NotificationDeliveryRules
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
@@ -23,12 +25,19 @@ sealed interface AppealOperationResult {
     data class Failure(val code:String):AppealOperationResult
 }
 
+internal object AppealConsistencyRules {
+    fun reviewApprovalStatus(changed:Boolean):ApprovalStatus = if(changed) ApprovalStatus.DRAFT else ApprovalStatus.APPROVED
+    fun lectureStatusAfterAcceptedChange(current:LectureStatus):LectureStatus =
+        if(current in setOf(LectureStatus.COMPLETED,LectureStatus.FROZEN)) LectureStatus.NEEDS_REVIEW else current
+    fun verifiedSeconds(durationSeconds:Long,percentage:Double):Long = (durationSeconds*percentage.coerceIn(0.0,1.0)).toLong()
+}
+
 class AttendanceAppealRepository(
     private val db:HammamDatabase,
     private val cipher:KeystoreCipher,
     private val authorization:AuthorizationRepository?=null,
 ) {
-    private val dao=db.coreDao()
+    private val dao=db.coreDao();private val graphSyncOutbox=AcademicGraphSyncOutbox(db,cipher)
 
     fun observeForStudent(studentId:String):Flow<List<AttendanceAppealEntity>> = dao.observeStudentAppeals(studentId)
     fun observeByStatus(status:AppealStatus?):Flow<List<AttendanceAppealEntity>> = dao.observeAppeals(status)
@@ -55,7 +64,9 @@ class AttendanceAppealRepository(
     ):AppealOperationResult = db.withTransaction {
         if(description.isBlank()) return@withTransaction AppealOperationResult.Failure("DESCRIPTION_REQUIRED")
         val context=loadContext(attendanceRecordId)?:return@withTransaction AppealOperationResult.Failure("ATTENDANCE_CONTEXT_NOT_FOUND")
+        if(context.attendanceRecord.studentId!=context.student.id || context.attendanceRecord.lectureId!=context.lecture.id) return@withTransaction AppealOperationResult.Failure("ATTENDANCE_CONTEXT_MISMATCH")
         if(actorId!=null && authorization!=null && (!authorization.hasPermission(actorId,"SUBMIT_APPEAL") || !authorization.canAccessStudent(actorId,context.student.id))) return@withTransaction AppealOperationResult.Failure("APPEAL_SCOPE_PERMISSION_REQUIRED")
+        if(dao.countPendingAppealsForRecord(attendanceRecordId)>0) return@withTransaction AppealOperationResult.Failure("PENDING_APPEAL_EXISTS")
         val now=System.currentTimeMillis()
         val cloudSync=dao.isFeatureEnabled("CLOUD_SYNC") == true
         val appeal=AttendanceAppealEntity(
@@ -102,6 +113,7 @@ class AttendanceAppealRepository(
         if(appeal.status != AppealStatus.PENDING) return@withTransaction AppealOperationResult.Failure("APPEAL_ALREADY_REVIEWED")
         val record=dao.getAttendanceRecord(appeal.attendanceRecordId)?:return@withTransaction AppealOperationResult.Failure("ATTENDANCE_RECORD_NOT_FOUND")
         val lecture=dao.getLectureById(appeal.lectureId)?:return@withTransaction AppealOperationResult.Failure("LECTURE_NOT_FOUND")
+        if(record.studentId!=appeal.studentId || record.lectureId!=appeal.lectureId) return@withTransaction AppealOperationResult.Failure("APPEAL_RECORD_MISMATCH")
         if(authorization!=null && (!authorization.hasPermission(reviewerId,"REVIEW_APPEALS") || !authorization.canAccessStudent(reviewerId,appeal.studentId))) return@withTransaction AppealOperationResult.Failure("APPEAL_SCOPE_PERMISSION_REQUIRED")
         if(lecture.status == LectureStatus.FROZEN && !canEditFrozen) return@withTransaction AppealOperationResult.Failure("FROZEN_PERMISSION_REQUIRED")
         if(accept && newStatus==null) return@withTransaction AppealOperationResult.Failure("NEW_STATUS_REQUIRED")
@@ -121,19 +133,23 @@ class AttendanceAppealRepository(
             val updatedPercentage=(newAttendancePercentage ?: record.attendancePercentage).coerceIn(0.0,1.0)
             val updatedRecord=record.copy(
                 finalStatus=newStatus!!,
-                verifiedPresenceSeconds=(record.lectureDurationSeconds*updatedPercentage).toLong(),
+                verifiedPresenceSeconds=AppealConsistencyRules.verifiedSeconds(record.lectureDurationSeconds,updatedPercentage),
                 attendancePercentage=updatedPercentage,
+                approvalStatus=AppealConsistencyRules.reviewApprovalStatus(changed=true),
                 source=PresenceSource.MANUAL,
                 notes=listOfNotNull(record.notes,"Appeal ${appeal.id} accepted: ${decisionNote.trim()}").joinToString("\n"),
                 updatedAt=now,
                 version=record.version+1,
             )
-            dao.upsertRecord(updatedRecord)
+            dao.upsertRecord(updatedRecord);graphSyncOutbox.recordAttendanceRecord(updatedRecord,now)
+            if(lecture.status in setOf(LectureStatus.COMPLETED,LectureStatus.FROZEN)){
+                val updatedLecture=lecture.copy(status=AppealConsistencyRules.lectureStatusAfterAcceptedChange(lecture.status),updatedAt=now,version=lecture.version+1);dao.updateLecture(updatedLecture);graphSyncOutbox.recordLecture(updatedLecture,now)
+            }
             dao.insertAudit(AuditLogEntity(
                 id=UUID.randomUUID().toString(), actorId=reviewerId,
                 action="ATTENDANCE_CHANGED_AFTER_APPEAL", entityType="AttendanceRecord", entityId=record.id,
-                oldData="{\"status\":\"${record.finalStatus.name}\",\"percentage\":${record.attendancePercentage}}",
-                newData="{\"status\":\"${updatedRecord.finalStatus.name}\",\"percentage\":${updatedRecord.attendancePercentage},\"appealId\":\"${appeal.id}\"}",
+                oldData="{\"status\":\"${record.finalStatus.name}\",\"percentage\":${record.attendancePercentage},\"approvalStatus\":\"${record.approvalStatus.name}\"}",
+                newData="{\"status\":\"${updatedRecord.finalStatus.name}\",\"percentage\":${updatedRecord.attendancePercentage},\"approvalStatus\":\"DRAFT\",\"lectureStatus\":\"${if(lecture.status in setOf(LectureStatus.COMPLETED,LectureStatus.FROZEN)) LectureStatus.NEEDS_REVIEW else lecture.status}\",\"appealId\":\"${appeal.id}\"}",
                 reason=decisionNote.trim(), timestamp=now
             ))
         }
@@ -162,7 +178,8 @@ class AttendanceAppealRepository(
     }
 
     private suspend fun enqueueAppealSync(appeal:AttendanceAppealEntity,operation:String,now:Long){
-        val payload="""{"id":"${appeal.id}","studentId":"${appeal.studentId}","attendanceRecordId":"${appeal.attendanceRecordId}","status":"${appeal.status.name}","version":${appeal.version}}"""
+        fun esc(v:String)=v.replace("\\","\\\\").replace("\"","\\\"")
+        val payload="""{"id":"${esc(appeal.id)}","studentId":"${esc(appeal.studentId)}","attendanceRecordId":"${esc(appeal.attendanceRecordId)}","lectureId":"${esc(appeal.lectureId)}","subjectId":"${esc(appeal.subjectId)}","reasonType":"${esc(appeal.reasonType)}","description":"${esc(appeal.description)}","attachmentRemoteUrl":${appeal.attachmentRemoteUrl?.let{"\"${esc(it)}\""}?:"null"},"status":"${appeal.status.name}","submittedAt":${appeal.submittedAt},"updatedAt":${appeal.updatedAt},"reviewedBy":${appeal.reviewedBy?.let{"\"${esc(it)}\""}?:"null"},"reviewedAt":${appeal.reviewedAt?:"null"},"decisionNote":${appeal.decisionNote?.let{"\"${esc(it)}\""}?:"null"},"version":${appeal.version}}"""
         dao.enqueueSync(SyncQueueEntity(
             id=UUID.randomUUID().toString(), entityType="AttendanceAppeal", entityId=appeal.id, operation=operation,
             payloadCiphertext=cipher.encrypt(payload), createdAt=now,lastAttempt=null,retryCount=0,status=QueueStatus.PENDING,error=null,
@@ -178,11 +195,13 @@ class AttendanceAppealRepository(
             scheduledAt=now,sentAt=now,retryCount=0,error=null,deduplicationKey="appeal-review-inapp:${appeal.id}:${appeal.version}",version=1
         ))
         if(dao.isFeatureEnabled("WHATSAPP")==true){
-            dao.enqueueNotification(NotificationEntity(
+            val student=dao.getStudentById(appeal.studentId)
+            val recipient=student?.takeIf{it.archivedAt==null && it.status==StudentStatus.ACTIVE}?.let{NotificationDeliveryRules.normalizePhone(it.whatsappNumber?:it.phoneNumber)}
+            if(recipient!=null)dao.enqueueNotification(NotificationEntity(
                 id=UUID.randomUUID().toString(),recipientType="STUDENT",recipientId=appeal.studentId,channel="WHATSAPP",
                 template="ATTENDANCE_APPEAL_REVIEWED",payloadCiphertext=cipher.encrypt(payload),status=QueueStatus.PENDING,
                 scheduledAt=now,sentAt=null,retryCount=0,error=null,deduplicationKey="appeal-review-wa:${appeal.id}:${appeal.version}",version=1
-            ))
+            )) else dao.insertAudit(AuditLogEntity(UUID.randomUUID().toString(),null,"NOTIFICATION_RECIPIENT_MISSING","AttendanceAppeal",appeal.id,null,"{\"channel\":\"WHATSAPP\"}","RECIPIENT_NOT_FOUND",now))
         }
     }
 }

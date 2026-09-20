@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.first
 class AttendanceForegroundService:Service(){
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Default)
     private var sessionJob:Job?=null
+    private var restartJob:Job?=null
 
     override fun onCreate(){
         super.onCreate()
@@ -30,23 +31,32 @@ class AttendanceForegroundService:Service(){
             scope.launch{(application as HammamAttendAiApplication).container.attendance.markDetectorIssue("START_FOREGROUND_FAILED")}
             stopSelf();return START_NOT_STICKY
         }
-        sessionJob?.cancel()
-        sessionJob=scope.launch{
-            try{runAttendanceLoop(restored=intent==null || intent.getBooleanExtra(EXTRA_RESTORED,false))}
-            catch(e:CancellationException){throw e}
-            catch(e:Exception){
-                android.util.Log.e("AttendanceForegroundService","ATTENDANCE_LOOP_FAILED",e)
-                runCatching{(application as HammamAttendAiApplication).container.attendance.markDetectorIssue(e.message?.takeIf{it.isNotBlank()}?:"BLE_RUNTIME_FAILED")}
-                runCatching{(application as HammamAttendAiApplication).container.bleDetector.stop()}
-                stopSelf()
+        val restored=intent==null || intent.getBooleanExtra(EXTRA_RESTORED,false)
+        restartJob?.cancel()
+        restartJob=scope.launch{
+            val previous=sessionJob
+            previous?.cancelAndJoin()
+            if(!isActive)return@launch
+            val job=launch{
+                try{runAttendanceLoop(restored=restored)}
+                catch(e:CancellationException){throw e}
+                catch(e:Exception){
+                    android.util.Log.e("AttendanceForegroundService","ATTENDANCE_LOOP_FAILED",e)
+                    runCatching{(application as HammamAttendAiApplication).container.attendance.markDetectorIssue(e.message?.takeIf{it.isNotBlank()}?:"BLE_RUNTIME_FAILED")}
+                    runCatching{(application as HammamAttendAiApplication).container.bleDetector.stop()}
+                    stopSelf()
+                }
             }
+            sessionJob=job
         }
         return START_STICKY
     }
 
     private suspend fun runAttendanceLoop(restored:Boolean)=coroutineScope {
         val container=(application as HammamAttendAiApplication).container
-        val session=container.database.coreDao().getActiveSession() ?: run{stopSelf();return@coroutineScope}
+        val dao=container.database.coreDao()
+        val session=dao.getActiveSession() ?: run{stopSelf();return@coroutineScope}
+        if(dao.isFeatureEnabled("BLE_ATTENDANCE")!=true){container.attendance.markDetectorIssue("BLE_ATTENDANCE_DISABLED");stopSelf();return@coroutineScope}
         if(restored && !session.restoredAfterCrash) container.database.coreDao().updateSession(session.copy(restoredAfterCrash=true,version=session.version+1))
         container.bleDetector.start(session.id)
         when(val initialState=container.bleDetector.state.first()){
@@ -76,10 +86,10 @@ class AttendanceForegroundService:Service(){
                 container.attendance.closeExpiredPresence(session.id)
             }
         }
-        try{joinAll(stateCollector,collector,maintenance)}finally{container.bleDetector.stop()}
+        try{joinAll(stateCollector,collector,maintenance)}finally{withContext(NonCancellable){container.bleDetector.stop()}}
     }
 
-    override fun onDestroy(){sessionJob?.cancel();scope.cancel();super.onDestroy()}
+    override fun onDestroy(){restartJob?.cancel();sessionJob?.cancel();scope.cancel();super.onDestroy()}
     override fun onBind(intent:Intent?):IBinder?=null
 
     companion object { const val EXTRA_RESTORED="restored" }
