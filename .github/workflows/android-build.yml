@@ -50,7 +50,7 @@ jobs:
           key: hammam-attendai-debug-keystore-v1
 
       - name: Unit tests
-        run: ./gradlew test --stacktrace
+        run: ./gradlew :android:app:testDebugUnitTest --stacktrace
 
       - name: Lint
         run: ./gradlew :android:app:lintDebug --stacktrace

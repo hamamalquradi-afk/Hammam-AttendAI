@@ -25,7 +25,7 @@ internal object SyncIntegrityRules {
         "Backend not configured","HTTPS_REQUIRED","UNAUTHORIZED"
     )
     fun supported(entityType:String,operation:String)=entityType in supportedEntities && operation in supportedOperations
-    fun hierarchyParentRefs(entityType:String,payload:JSONObject):List<Pair<String,String>>=when(entityType){
+    fun hierarchyParentRefs(entityType:String,payload:JSONObject):List<Pair<String,String>> = when(entityType){
         "Faculty"->listOf("University" to payload.optString("universityId"))
         "Department"->listOf("Faculty" to payload.optString("facultyId"))
         "Level"->listOf("Department" to payload.optString("departmentId"))

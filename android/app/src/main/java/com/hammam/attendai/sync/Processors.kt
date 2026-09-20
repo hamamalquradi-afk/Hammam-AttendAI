@@ -226,7 +226,10 @@ class SyncProcessor(private val db:HammamDatabase,private val backend:BackendCli
         val p=change.optJSONObject("payload")?:return false
         val id=p.optString("id");val remoteVersion=p.optLong("version",0);val dao=db.coreDao();val local=dao.getStudentById(id);val meta=dao.getSyncEntityMetadata("Student",id)
         if(local!=null&&meta==null)throw PullApplyException("Student",id,"SYNC_LOCAL_METADATA_MISSING")
-        val levelId=p.optNullableString("levelId"),batchId=p.optNullableString("batchId"),sectionId=p.optNullableString("sectionId"),groupId=p.optNullableString("groupId")
+        val levelId=p.optNullableString("levelId")
+        val batchId=p.optNullableString("batchId")
+        val sectionId=p.optNullableString("sectionId")
+        val groupId=p.optNullableString("groupId")
         val level=levelId?.let{dao.getLevelById(it)};val batch=batchId?.let{dao.getBatchById(it)};val section=sectionId?.let{dao.getSectionById(it)};val group=groupId?.let{dao.getGroupById(it)}
         if(levelId!=null&&level==null||batchId!=null&&batch==null||sectionId!=null&&section==null||groupId!=null&&group==null)throw PullApplyException("Student",id,"SYNC_PARENT_MISSING")
         if(batch!=null&&levelId!=null&&batch.levelId!=levelId||section!=null&&batchId!=null&&section.batchId!=batchId||group!=null&&sectionId!=null&&group.sectionId!=sectionId)throw PullApplyException("Student",id,"SYNC_PARENT_CHAIN_MISMATCH")
@@ -297,7 +300,10 @@ class SyncProcessor(private val db:HammamDatabase,private val backend:BackendCli
             RemoteAppealDecision.CONFLICT->throw PullApplyException("AttendanceAppeal",id,"SYNC_CONFLICT_LOCAL_UNSYNCED")
             RemoteAppealDecision.APPLY->Unit
         }
-        val studentId=payload.optString("studentId"),recordId=payload.optString("attendanceRecordId"),lectureId=payload.optString("lectureId"),subjectId=payload.optString("subjectId")
+        val studentId=payload.optString("studentId")
+        val recordId=payload.optString("attendanceRecordId")
+        val lectureId=payload.optString("lectureId")
+        val subjectId=payload.optString("subjectId")
         val student=dao.getStudentById(studentId)?:return false;val record=dao.getAttendanceRecord(recordId)?:return false;val lecture=dao.getLectureById(lectureId)?:return false;val subject=dao.getSubjectById(subjectId)?:return false
         if(record.studentId!=student.id||record.lectureId!=lecture.id||lecture.subjectId!=subject.id)throw PullApplyException("AttendanceAppeal",id,"SYNC_PARENT_CHAIN_MISMATCH")
         val remote=AttendanceAppealEntity(id,studentId,recordId,lectureId,subjectId,payload.optString("reasonType","OTHER"),payload.optString("description"),local?.attachmentLocalUri,payload.optNullableString("attachmentRemoteUrl"),runCatching{AppealStatus.valueOf(payload.optString("status"))}.getOrNull()?:return false,payload.optLong("submittedAt"),payload.optLong("updatedAt"),payload.optNullableString("reviewedBy"),payload.optNullableLong("reviewedAt"),payload.optNullableString("decisionNote"),AppealSyncStatus.SYNCED,remoteVersion)
