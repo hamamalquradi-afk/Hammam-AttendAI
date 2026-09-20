@@ -52,7 +52,7 @@ class BackendAccountSessionManager(
         if(!r.ok)return failure(r.error?:"PROVISIONING_FAILED",if(r.error=="PROVISIONING_REQUIRED")BackendAccountState.PROVISIONING_REQUIRED else localState())
         val root=runCatching{JSONObject(r.responseBody.orEmpty())}.getOrNull()?:return failure("AUTH_PROTOCOL_INVALID",localState())
         val accountId=root.optString("accountId").takeIf{it.isNotBlank()}?:return failure("AUTH_PROTOCOL_INVALID",localState())
-        val workspaceId=root.optString("workspaceId").takeIf{SyncIntegrityRules::validWorkspaceId}?:return failure("AUTH_PROTOCOL_INVALID",localState())
+        val workspaceId=root.optString("workspaceId").takeIf{SyncIntegrityRules.validWorkspaceId(it)}?:return failure("AUTH_PROTOCOL_INVALID",localState())
         val accountCredential=root.optString("accountCredential").takeIf{it.isNotBlank()}?:return failure("AUTH_PROTOCOL_INVALID",localState())
         secretStore.put(BackendSecretKeys.ACCOUNT_CREDENTIAL,accountCredential)
         secretStore.put(BackendSecretKeys.SESSION_TOKEN,null)
@@ -78,7 +78,7 @@ class BackendAccountSessionManager(
         val sessionToken=BackendSessionRules.replacementToken(root.optString("sessionToken"))?:return failure("AUTH_PROTOCOL_INVALID",localState())
         val expiresAt=root.optLong("expiresAt",0L).takeIf{it>System.currentTimeMillis()}?:return failure("AUTH_PROTOCOL_INVALID",localState())
         val workspaces=root.optJSONArray("workspaces")
-        val memberships=buildList{if(workspaces!=null)for(i in 0 until workspaces.length()){workspaces.optString(i).takeIf{SyncIntegrityRules::validWorkspaceId}?.let(::add)}}
+        val memberships=buildList{if(workspaces!=null)for(i in 0 until workspaces.length()){workspaces.optString(i).takeIf{SyncIntegrityRules.validWorkspaceId(it)}?.let(::add)}}
         val currentWorkspace=preferences.syncWorkspaceId.first()
         val selected=when{currentWorkspace in memberships->currentWorkspace;memberships.isNotEmpty()->memberships.first();else->null}
             ?:return failure("MEMBERSHIP_REQUIRED",BackendAccountState.UNAUTHENTICATED)

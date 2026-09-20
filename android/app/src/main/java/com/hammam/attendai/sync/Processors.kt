@@ -375,18 +375,20 @@ class NotificationProcessor(private val db:HammamDatabase,private val backend:Ba
         }
         return all
     }
-    private suspend fun resolveRecipient(type:String,id:String,channel:String):String?=when(type.uppercase()){
-        "STUDENT"->{
-            val s=db.coreDao().getStudentById(id)?:return null
-            if(s.archivedAt!=null || s.status.name!="ACTIVE")return null
-            if(channel=="WHATSAPP")NotificationDeliveryRules.normalizePhone(s.whatsappNumber?:s.phoneNumber) else null
+    private suspend fun resolveRecipient(type:String,id:String,channel:String):String?{
+        return when(type.uppercase()){
+            "STUDENT"->{
+                val s=db.coreDao().getStudentById(id)?:return null
+                if(s.archivedAt!=null || s.status.name!="ACTIVE")return null
+                if(channel=="WHATSAPP")NotificationDeliveryRules.normalizePhone(s.whatsappNumber?:s.phoneNumber) else null
+            }
+            "TEACHER"->{
+                val t=db.coreDao().getTeacherById(id)?:return null
+                if(t.archivedAt!=null)return null
+                if(channel=="WHATSAPP")NotificationDeliveryRules.normalizePhone(t.whatsapp?:t.phone) else NotificationDeliveryRules.validEmail(t.email)
+            }
+            else->null
         }
-        "TEACHER"->{
-            val t=db.coreDao().getTeacherById(id)?:return null
-            if(t.archivedAt!=null)return null
-            if(channel=="WHATSAPP")NotificationDeliveryRules.normalizePhone(t.whatsapp?:t.phone) else NotificationDeliveryRules.validEmail(t.email)
-        }
-        else->null
     }
     private fun deliveryEnvelope(channel:String,recipient:String,template:String,payload:String):String{
         fun esc(v:String)=v.replace("\\","\\\\").replace("\"","\\\"")
