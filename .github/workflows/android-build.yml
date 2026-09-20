@@ -50,7 +50,18 @@ jobs:
           key: hammam-attendai-debug-keystore-v1
 
       - name: Unit tests
-        run: ./gradlew :android:app:testDebugUnitTest --stacktrace
+        run: ./gradlew :android:app:testDebugUnitTest --stacktrace --info
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5h-unit-test-reports
+          path: |
+            android/app/build/test-results/testDebugUnitTest/
+            android/app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Lint
         run: ./gradlew :android:app:lintDebug --stacktrace
