@@ -61,8 +61,8 @@ class ConfigurationBackupManager(
         val parsed=parse(source,actorId);require(parsed.issues.isEmpty()){parsed.issues.firstOrNull()?:"CONFIGURATION_INVALID"}
         db.withTransaction{
             parsed.policies.forEach{row->dao.upsertAttendancePolicy(row);referenceSyncOutbox?.enqueueAttendancePolicyIfEnabled(row)}
-            parsed.reports.forEach(dao::upsertTeacherReportSetting)
-            parsed.flags.forEach(dao::upsertFeatureFlag)
+            parsed.reports.forEach{row->dao.upsertTeacherReportSetting(row)}
+            parsed.flags.forEach{row->dao.upsertFeatureFlag(row)}
             parsed.rolePerms.forEach{(roleName,permissionCode)->
                 require(authorization.isSystemOwner(actorId)){"SYSTEM_OWNER_REQUIRED_FOR_ROLEPERM_IMPORT"}
                 val role=dao.getRoleIdByName(roleName)?:error("ROLE_NOT_FOUND");val perm=dao.getPermissionIdByCode(permissionCode)?:error("PERMISSION_NOT_FOUND")

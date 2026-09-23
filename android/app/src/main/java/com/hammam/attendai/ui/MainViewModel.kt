@@ -322,12 +322,12 @@ class MainViewModel(app:Application,private val savedStateHandle:SavedStateHandl
         _message.value="LOCAL_ADMIN_SESSION_RESTORED"
     }}
     fun addStudent(name:String,number:String?,levelId:String,batchId:String,sectionId:String,groupId:String){runtimeSafeLaunch("STUDENT_ADD_FAILED") {
-        val actor=currentUserId.value
+        val actor=currentUserId.value?:error("LOCAL_SESSION_INVALID")
         if(!container.authorization.hasPermission(actor,"EDIT_STUDENTS")){_message.value="EDIT_STUDENTS_PERMISSION_REQUIRED";return@runtimeSafeLaunch}
         container.students.add(name,number,levelId,batchId,sectionId,groupId,actor)
     }}
     fun updateStudentAcademicScope(studentId:String,levelId:String,batchId:String,sectionId:String,groupId:String){runtimeSafeLaunch("STUDENT_SCOPE_UPDATE_FAILED") {
-        val actor=currentUserId.value
+        val actor=currentUserId.value?:error("LOCAL_SESSION_INVALID")
         if(!container.authorization.hasPermission(actor,"EDIT_STUDENTS")){_message.value="EDIT_STUDENTS_PERMISSION_REQUIRED";return@runtimeSafeLaunch}
         container.students.updateAcademicScope(studentId,levelId,batchId,sectionId,groupId,actor)
     }}

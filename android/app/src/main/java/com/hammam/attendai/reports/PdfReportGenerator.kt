@@ -35,7 +35,7 @@ class PdfReportGenerator {
     data class Output(val file:File,val sha256:String)
     private data class PageState(val page:PdfDocument.Page,val canvas:Canvas)
 
-    fun generate(file:File,labels:ReportPdfLabels,summary:ReportSummary,rows:List<ReportAttendanceRow>):Output{
+    internal fun generate(file:File,labels:ReportPdfLabels,summary:ReportSummary,rows:List<ReportAttendanceRow>):Output{
         val doc=PdfDocument()
         val paint=TextPaint(Paint.ANTI_ALIAS_FLAG).apply{color=Color.BLACK}
         var pageNumber=0

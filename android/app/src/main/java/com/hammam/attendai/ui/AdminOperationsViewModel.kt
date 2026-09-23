@@ -216,7 +216,7 @@ class AdminOperationsViewModel(app:Application):AndroidViewModel(app){
 
     fun previewStudentCsv(uri:Uri)=guardedLaunch(studentTransferInFlight){uid->
         require(container.authorization.hasPermission(uid,"EDIT_STUDENTS")){"EDIT_STUDENTS_PERMISSION_REQUIRED"}
-        val preview=withContext(Dispatchers.IO){val text=readText(uri)?:error("CSV_READ_FAILED");container.students.validateImport(StudentCsv.preview(text))};_studentImportTarget.value=null;_studentImportPreview.value=preview;_message.value="STUDENT_CSV_PREVIEW_READY"
+        val preview=withContext(Dispatchers.IO){val text=readTextLimited(uri,2*1024*1024);container.students.validateImport(StudentCsv.preview(text))};_studentImportTarget.value=null;_studentImportPreview.value=preview;_message.value="STUDENT_CSV_PREVIEW_READY"
     }
     fun setStudentImportTarget(levelId:String,batchId:String,sectionId:String,groupId:String){
         _studentImportTarget.value=if(listOf(levelId,batchId,sectionId,groupId).all{it.isNotBlank()})StudentImportTarget(levelId,batchId,sectionId,groupId) else null

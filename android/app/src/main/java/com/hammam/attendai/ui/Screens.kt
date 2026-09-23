@@ -182,7 +182,7 @@ private fun readDeviceSnapshot(context:Context,s:DashboardState):DeviceSnapshot{
 }
 
 internal fun sanitizeDiagnosticValue(value:String):String=value
-    .replace(Regex("(?i)((?:authorization|api[_ -]?key|token|password|pin(?:_hash)?)\s*[:=]\s*(?:bearer\s+)?[^\s,;|]+|bearer\s+[^\s,;|]+|sk-[A-Za-z0-9_-]+|AIza[A-Za-z0-9_-]+)"),"[REDACTED]")
+    .replace(Regex("""(?i)((?:authorization|api[_ -]?key|token|password|pin(?:_hash)?)\s*[:=]\s*(?:bearer\s+)?[^\s,;|]+|bearer\s+[^\s,;|]+|sk-[A-Za-z0-9_-]+|AIza[A-Za-z0-9_-]+)"""),"[REDACTED]")
     .replace('\n',' ').replace('\r',' ').take(240)
 
 internal fun diagnosticsText(d:DeviceSnapshot)=buildString{
