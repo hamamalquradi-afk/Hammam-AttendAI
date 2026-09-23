@@ -1,0 +1,100 @@
+name: Android Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The execution environment used to package this source could not download
+      # binary dependencies. Normalize the checked-in bootstrap JAR to the
+      # official Gradle 8.9 Wrapper JAR before Gradle's validation/action runs.
+      - name: Restore official Gradle 8.9 wrapper JAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            https://raw.githubusercontent.com/gradle/gradle/v8.9.0/gradle/wrapper/gradle-wrapper.jar \
+            -o gradle/wrapper/gradle-wrapper.jar
+          echo "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17  gradle/wrapper/gradle-wrapper.jar" | sha256sum -c -
+
+      - name: Setup Gradle cache and validate wrapper
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          validate-wrappers: true
+
+      - name: Make wrapper executable
+        run: chmod +x gradlew
+
+      - name: Gradle version
+        run: ./gradlew --version
+
+      # Keep the debug signing identity stable across ephemeral GitHub runners so
+      # test APK updates do not unexpectedly require uninstalling the previous build.
+      - name: Restore stable debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: hammam-attendai-debug-keystore-v1
+
+      - name: Unit tests
+        run: ./gradlew :android:app:testDebugUnitTest --stacktrace --info
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5h-unit-test-reports
+          path: |
+            android/app/build/test-results/testDebugUnitTest/
+            android/app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Lint
+        run: ./gradlew :android:app:lintDebug --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew :android:app:assembleDebug --stacktrace
+
+      - name: Room runtime migration instrumentation
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          disable-animations: true
+          script: ./gradlew :android:app:connectedDebugAndroidTest --stacktrace --info
+
+      - name: Upload migration instrumentation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5h-repair8-migration-instrumentation
+          path: |
+            android/app/build/outputs/androidTest-results/
+            android/app/build/reports/androidTests/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hammam-AttendAI-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

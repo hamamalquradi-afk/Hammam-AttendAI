@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="reports" path="reports/" />
+    <files-path name="backups" path="backups/" />
+    <files-path name="exports" path="exports/" />
+    <files-path name="timetable_imports" path="timetable_imports/" />
+</paths>
