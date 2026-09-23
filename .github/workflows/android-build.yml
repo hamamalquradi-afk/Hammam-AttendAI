@@ -41,6 +41,9 @@ jobs:
       - name: Make wrapper executable
         run: chmod +x gradlew
 
+      - name: Gradle version
+        run: ./gradlew --version
+
       # Keep the debug signing identity stable across ephemeral GitHub runners so
       # test APK updates do not unexpectedly require uninstalling the previous build.
       - name: Restore stable debug keystore
@@ -50,7 +53,18 @@ jobs:
           key: hammam-attendai-debug-keystore-v1
 
       - name: Unit tests
-        run: ./gradlew test --stacktrace
+        run: ./gradlew :android:app:testDebugUnitTest --stacktrace --info
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5h-unit-test-reports
+          path: |
+            android/app/build/test-results/testDebugUnitTest/
+            android/app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Lint
         run: ./gradlew :android:app:lintDebug --stacktrace

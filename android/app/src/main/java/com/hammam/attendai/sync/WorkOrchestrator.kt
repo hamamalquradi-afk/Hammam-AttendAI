@@ -26,7 +26,8 @@ object WorkOrchestrator {
         WorkManager.getInstance(context).enqueueUniqueWork("hammam_notifications_now",ExistingWorkPolicy.KEEP,notifications)
     }
     fun kickReports(context:Context){
+        // Local report generation must remain available offline; delivery failures are retried by ReportProcessor.
         val req=OneTimeWorkRequestBuilder<ReportWorker>().build()
-        WorkManager.getInstance(context).enqueueUniqueWork("hammam_reports_now",ExistingWorkPolicy.REPLACE,req)
+        WorkManager.getInstance(context).enqueueUniqueWork("hammam_reports_now",ExistingWorkPolicy.KEEP,req)
     }
 }

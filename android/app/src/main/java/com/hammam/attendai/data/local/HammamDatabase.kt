@@ -17,10 +17,10 @@ import com.hammam.attendai.data.local.entity.*
         SubjectEntity::class, TeacherSubjectEntity::class, TimetableEntity::class, WeeklyTimetableVersionEntity::class, LectureEntity::class, AttendanceSessionEntity::class,
         AttendanceRecordEntity::class, PresenceIntervalEntity::class, PresenceEventEntity::class, AttendanceAppealEntity::class,
         ExcusedAbsenceEntity::class, NotificationEntity::class, NotificationTemplateEntity::class, TeacherReportSettingEntity::class,
-        ReportJobEntity::class, GeneratedReportEntity::class, AuditLogEntity::class, SyncQueueEntity::class, AppSettingEntity::class,
+        ReportJobEntity::class, GeneratedReportEntity::class, AuditLogEntity::class, SyncQueueEntity::class, SyncEntityMetadataEntity::class, AppSettingEntity::class,
         FeatureFlagEntity::class, BackupHistoryEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -150,6 +150,17 @@ abstract class HammamDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_audit_logs_entityType_entityId_timestamp ON audit_logs(entityType,entityId,timestamp)")
             }
         }
-        val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE IF NOT EXISTS sync_entity_metadata (
+                    entityType TEXT NOT NULL,entityId TEXT NOT NULL,localVersion INTEGER NOT NULL,
+                    firstSeenAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,payloadFingerprint TEXT NOT NULL,
+                    lastSyncedServerVersion INTEGER,PRIMARY KEY(entityType,entityId)
+                )""".trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_entity_metadata_entityType ON sync_entity_metadata(entityType)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_entity_metadata_updatedAt ON sync_entity_metadata(updatedAt)")
+            }
+        }
+        val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
     }
 }

@@ -16,18 +16,20 @@ import java.time.LocalDate
 import java.time.DayOfWeek
 import java.time.temporal.TemporalAdjusters
 import java.util.UUID
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.hammam.attendai.HammamAttendAiApplication
 
 class SyncWorker(ctx:Context,p:WorkerParameters):CoroutineWorker(ctx,p){
-    override suspend fun doWork():Result = (applicationContext as HammamAttendAiApplication).container.syncProcessor.process().toWorkerResult()
+    override suspend fun doWork():Result = guardedWorkerResult{(applicationContext as HammamAttendAiApplication).container.syncProcessor.process()}
 }
 class NotificationWorker(ctx:Context,p:WorkerParameters):CoroutineWorker(ctx,p){
-    override suspend fun doWork():Result = (applicationContext as HammamAttendAiApplication).container.notificationProcessor.process().toWorkerResult()
+    override suspend fun doWork():Result = guardedWorkerResult{(applicationContext as HammamAttendAiApplication).container.notificationProcessor.process()}
 }
 class ReportWorker(ctx:Context,p:WorkerParameters):CoroutineWorker(ctx,p){
-    override suspend fun doWork():Result = (applicationContext as HammamAttendAiApplication).container.reportProcessor.processDueJobs().toWorkerResult()
+    override suspend fun doWork():Result = guardedWorkerResult{(applicationContext as HammamAttendAiApplication).container.reportProcessor.processDueJobs()}
 }
 class LectureMaterializationWorker(ctx:Context,p:WorkerParameters):CoroutineWorker(ctx,p){
     override suspend fun doWork():Result = runCatching{
@@ -65,4 +67,11 @@ class TimetableReminderWorker(ctx:Context,p:WorkerParameters):CoroutineWorker(ct
         nm.notify((System.currentTimeMillis()/86_400_000L).toInt(),n)
     }
 }
-private fun Boolean.toWorkerResult():androidx.work.ListenableWorker.Result=if(this)androidx.work.ListenableWorker.Result.success() else androidx.work.ListenableWorker.Result.retry()
+private suspend fun guardedWorkerResult(block:suspend()->Boolean):androidx.work.ListenableWorker.Result=try{
+    if(block()) androidx.work.ListenableWorker.Result.success() else androidx.work.ListenableWorker.Result.retry()
+}catch(e:CancellationException){throw e
+}catch(e:IOException){androidx.work.ListenableWorker.Result.retry()
+}catch(e:SecurityException){androidx.work.ListenableWorker.Result.failure()
+}catch(e:IllegalArgumentException){androidx.work.ListenableWorker.Result.failure()
+}catch(e:IllegalStateException){androidx.work.ListenableWorker.Result.failure()
+}catch(e:Exception){androidx.work.ListenableWorker.Result.failure()}

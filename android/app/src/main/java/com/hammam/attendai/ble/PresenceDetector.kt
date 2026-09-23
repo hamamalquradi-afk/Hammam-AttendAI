@@ -10,6 +10,7 @@ interface PresenceDetector {
     val state: Flow<DetectorState>
     suspend fun start(sessionId:String)
     suspend fun stop()
+    suspend fun fail(code:String)
 }
 
 interface PresenceTokenResolver {

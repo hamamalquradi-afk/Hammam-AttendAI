@@ -1,18 +1,15 @@
 package com.hammam.attendai.ble
 
-import android.Manifest
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.*
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 class BlePresenceDetector(private val context:Context):PresenceDetector {
@@ -22,43 +19,64 @@ class BlePresenceDetector(private val context:Context):PresenceDetector {
     override val state=_state.asStateFlow()
     private var scanner:BluetoothLeScanner?=null
     private var callback:ScanCallback?=null
-    private val serviceUuid=UUID.fromString("86c90000-7b29-4b4a-9f19-bd856f5c12b1")
+    private val lifecycleMutex=Mutex()
+    private val callbackLock=Any()
+    private val serviceUuid=UUID.fromString(BleProtocol.SERVICE_UUID)
 
     @SuppressLint("MissingPermission")
-    override suspend fun start(sessionId:String){
-        if(!hasPermission()){_state.value=DetectorState.Error("PERMISSION_REQUIRED");return}
+    override suspend fun start(sessionId:String)=lifecycleMutex.withLock{
+        val readiness=BlePlatformReadiness.scanError(context)
+        if(readiness!=null){_state.value=DetectorState.Error(readiness);return@withLock}
         try{
-            val adapter=(context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-            if(adapter==null){_state.value=DetectorState.Error("BLE_UNAVAILABLE");return}
-            if(!adapter.isEnabled){_state.value=DetectorState.Error("BLUETOOTH_DISABLED");return}
-            scanner=adapter.bluetoothLeScanner ?: run{_state.value=DetectorState.Error("SCANNER_UNAVAILABLE");return}
+            val manager=context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            val nextScanner=manager?.adapter?.bluetoothLeScanner ?: run{_state.value=DetectorState.Error("SCANNER_UNAVAILABLE");return@withLock}
+            cleanupOwnedScan()
             _state.value=DetectorState.Starting
-            callback=object:ScanCallback(){
+            val newCallback=object:ScanCallback(){
                 override fun onScanResult(callbackType:Int,result:ScanResult){
+                    if(!synchronized(callbackLock){callback===this})return
                     val bytes=result.scanRecord?.serviceData?.entries?.firstOrNull{it.key.uuid==serviceUuid}?.value ?: return
-                    if(bytes.size!=8)return
+                    if(bytes.size!=BleProtocol.ROTATING_TOKEN_BYTES)return
                     val token=bytes.joinToString(""){"%02x".format(it.toInt() and 0xff)}
-                    _obs.tryEmit(PresenceObservation(token,result.rssi,System.currentTimeMillis()))
+                    if(!_obs.tryEmit(PresenceObservation(token,result.rssi,System.currentTimeMillis())))
+                        android.util.Log.w("BlePresenceDetector","BLE_OBSERVATION_DROPPED")
                 }
-                override fun onScanFailed(errorCode:Int){_state.value=DetectorState.Error("SCAN_$errorCode")}
+                override fun onScanFailed(errorCode:Int){
+                    val owned=synchronized(callbackLock){
+                        if(callback===this){callback=null;scanner=null;true}else false
+                    }
+                    if(owned)_state.value=DetectorState.Error("SCAN_$errorCode")
+                }
             }
+            synchronized(callbackLock){scanner=nextScanner;callback=newCallback}
             val filter=ScanFilter.Builder().setServiceData(android.os.ParcelUuid(serviceUuid),byteArrayOf()).build()
             val settings=ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).setReportDelay(0).build()
-            scanner?.startScan(listOf(filter),settings,callback)
+            nextScanner.startScan(listOf(filter),settings,newCallback)
             _state.value=DetectorState.Active
         }catch(_:SecurityException){
-            callback=null;scanner=null;_state.value=DetectorState.Error("PERMISSION_REVOKED")
+            cleanupOwnedScan();_state.value=DetectorState.Error("PERMISSION_REVOKED")
         }catch(_:IllegalStateException){
-            callback=null;scanner=null;_state.value=DetectorState.Error("SCANNER_STATE_ERROR")
+            cleanupOwnedScan();_state.value=DetectorState.Error("SCANNER_STATE_ERROR")
+        }catch(_:Exception){
+            cleanupOwnedScan();_state.value=DetectorState.Error("SCANNER_RUNTIME_ERROR")
         }
     }
+
     @SuppressLint("MissingPermission")
-    override suspend fun stop(){
-        runCatching{callback?.let{scanner?.stopScan(it)}}
-        callback=null;scanner=null;_state.value=DetectorState.Idle
+    private fun cleanupOwnedScan(){
+        val owned=synchronized(callbackLock){
+            Pair(scanner,callback).also{scanner=null;callback=null}
+        }
+        runCatching{owned.second?.let{owned.first?.stopScan(it)}}
     }
-    private fun hasPermission():Boolean = if(Build.VERSION.SDK_INT>=31)
-        ContextCompat.checkSelfPermission(context,Manifest.permission.BLUETOOTH_SCAN)==PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(context,Manifest.permission.BLUETOOTH_CONNECT)==PackageManager.PERMISSION_GRANTED
-        else ContextCompat.checkSelfPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED
+
+    override suspend fun stop()=lifecycleMutex.withLock{
+        cleanupOwnedScan()
+        _state.value=DetectorState.Idle
+    }
+
+    override suspend fun fail(code:String)=lifecycleMutex.withLock{
+        cleanupOwnedScan()
+        _state.value=DetectorState.Error(code)
+    }
 }

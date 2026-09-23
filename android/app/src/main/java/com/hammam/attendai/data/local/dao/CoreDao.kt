@@ -17,13 +17,15 @@ interface CoreDao {
     @Query("SELECT id FROM roles WHERE name=:name LIMIT 1") suspend fun getRoleIdByName(name:String):String?
     @Query("SELECT id FROM permissions WHERE code=:code LIMIT 1") suspend fun getPermissionIdByCode(code:String):String?
     @Query("SELECT * FROM users WHERE id=:id LIMIT 1") suspend fun getUserById(id:String):UserEntity?
+    @Query("SELECT * FROM users WHERE id=:id LIMIT 1") fun observeUserById(id:String):Flow<UserEntity?>
     @Query("SELECT COUNT(*) > 0 FROM users WHERE id=:userId AND isActive=1") suspend fun isUserActive(userId:String):Boolean
-    @Query("""SELECT u.id AS id,u.displayName AS displayName,u.isActive AS isActive,MIN(r.name) AS roleName FROM users u LEFT JOIN user_roles ur ON ur.userId=u.id LEFT JOIN roles r ON r.id=ur.roleId GROUP BY u.id,u.displayName,u.isActive ORDER BY u.displayName""") fun observeUserAccessRows():Flow<List<UserAccessRow>>
+    @Query("""SELECT u.id AS id,u.displayName AS displayName,u.isActive AS isActive,CASE WHEN MAX(CASE WHEN r.name='SYSTEM_OWNER' THEN 1 ELSE 0 END)=1 THEN 'SYSTEM_OWNER' ELSE MIN(r.name) END AS roleName FROM users u LEFT JOIN user_roles ur ON ur.userId=u.id LEFT JOIN roles r ON r.id=ur.roleId GROUP BY u.id,u.displayName,u.isActive ORDER BY u.displayName""") fun observeUserAccessRows():Flow<List<UserAccessRow>>
     @Query("SELECT * FROM roles ORDER BY name") fun observeRoles():Flow<List<RoleEntity>>
     @Query("SELECT * FROM permissions ORDER BY code") fun observePermissions():Flow<List<PermissionEntity>>
     @Query("DELETE FROM user_roles WHERE userId=:userId") suspend fun clearUserRoles(userId:String)
     @Query("SELECT COUNT(*) FROM users") suspend fun countUsers():Int
     @Query("""SELECT u.* FROM users u JOIN user_roles ur ON ur.userId=u.id JOIN roles r ON r.id=ur.roleId WHERE r.name='SYSTEM_OWNER' AND u.isActive=1 ORDER BY u.createdAt LIMIT 1""") suspend fun getSystemOwnerUser():UserEntity?
+    @Query("""SELECT u.* FROM users u JOIN user_roles ur ON ur.userId=u.id JOIN roles r ON r.id=ur.roleId WHERE r.name='SYSTEM_OWNER' ORDER BY u.createdAt LIMIT 1""") suspend fun getAnySystemOwnerUser():UserEntity?
     @Query("""SELECT u.* FROM users u JOIN user_roles ur ON ur.userId=u.id JOIN roles r ON r.id=ur.roleId WHERE r.name='Administrator' AND u.isActive=1 ORDER BY u.createdAt LIMIT 1""") suspend fun getActiveAdministratorUser():UserEntity?
     @Query("SELECT DISTINCT r.name FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId ORDER BY r.name") suspend fun getRoleNames(userId:String):List<String>
     @Query("SELECT r.name AS roleName,p.code AS permissionCode FROM role_permissions rp JOIN roles r ON r.id=rp.roleId JOIN permissions p ON p.id=rp.permissionId ORDER BY r.name,p.code") suspend fun getRolePermissionExport():List<RolePermissionExportRow>
@@ -57,6 +59,7 @@ interface CoreDao {
         AND (g.expiresAt IS NULL OR g.expiresAt>CAST(strftime('%s','now') AS INTEGER)*1000)
     ) ORDER BY code""") fun observePermissionCodes(userId:String):Flow<List<String>>
     @Query("SELECT * FROM students WHERE archivedAt IS NULL ORDER BY normalizedName") fun observeStudents(): Flow<List<StudentEntity>>
+    @Query("SELECT * FROM students ORDER BY id") suspend fun getStudentsOnce():List<StudentEntity>
     @Query("""SELECT DISTINCT st.* FROM students st WHERE st.archivedAt IS NULL AND EXISTS(SELECT 1 FROM users u WHERE u.id=:userId AND u.isActive=1) AND (
         EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId AND r.name IN ('SYSTEM_OWNER','Administrator'))
         OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND (
@@ -116,9 +119,21 @@ interface CoreDao {
         OR EXISTS(SELECT 1 FROM groups g JOIN sections sec ON sec.id=g.sectionId JOIN batches b ON b.id=sec.batchId JOIN levels lv ON lv.id=b.levelId
             JOIN user_scopes us ON us.userId=:userId AND us.active=1 WHERE g.id=l.groupId AND ((us.scopeType='GROUP' AND us.scopeId=g.id) OR (us.scopeType='SECTION' AND us.scopeId=sec.id) OR (us.scopeType='BATCH' AND us.scopeId=b.id) OR (us.scopeType='LEVEL' AND us.scopeId=lv.id)))
     ) ORDER BY COALESCE(l.actualEnd,l.updatedAt) DESC LIMIT 1""") fun observeScopedReviewLecture(userId:String):Flow<LectureEntity?>
+    @Query("""SELECT DISTINCT l.* FROM lectures l WHERE l.status IN ('COMPLETED','FROZEN') AND EXISTS(SELECT 1 FROM users u WHERE u.id=:userId AND u.isActive=1) AND (
+        EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId AND r.name IN ('SYSTEM_OWNER','Administrator'))
+        OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND us.scopeType='TEACHER' AND us.scopeId=l.teacherId)
+        OR EXISTS(SELECT 1 FROM groups g JOIN sections sec ON sec.id=g.sectionId JOIN batches b ON b.id=sec.batchId JOIN levels lv ON lv.id=b.levelId JOIN user_scopes us ON us.userId=:userId AND us.active=1 WHERE g.id=l.groupId AND ((us.scopeType='GROUP' AND us.scopeId=g.id) OR (us.scopeType='SECTION' AND us.scopeId=sec.id) OR (us.scopeType='BATCH' AND us.scopeId=b.id) OR (us.scopeType='LEVEL' AND us.scopeId=lv.id)))
+    ) ORDER BY COALESCE(l.actualEnd,l.scheduledEnd) DESC LIMIT 1""") suspend fun getLatestReportEligibleLectureForUser(userId:String):LectureEntity?
     @Query("SELECT * FROM attendance_sessions WHERE status='ACTIVE' ORDER BY startedAt DESC LIMIT 1") suspend fun getActiveSession(): AttendanceSessionEntity?
+    @Query("SELECT COUNT(*) FROM attendance_sessions WHERE status='ACTIVE'") suspend fun countActiveSessions():Int
     @Query("SELECT * FROM attendance_sessions WHERE id=:id LIMIT 1") suspend fun getSessionById(id:String):AttendanceSessionEntity?
     @Query("SELECT * FROM lectures WHERE status IN ('READY','SCHEDULED') ORDER BY scheduledStart LIMIT 1") suspend fun getNextLecture(): LectureEntity?
+    @Query("""SELECT l.* FROM lectures l JOIN subjects s ON s.id=l.subjectId JOIN groups g ON g.id=l.groupId JOIN semesters sem ON sem.id=l.semesterId JOIN teachers t ON t.id=l.teacherId JOIN attendance_policies p ON p.id=s.attendancePolicyId WHERE l.status IN ('READY','SCHEDULED') AND l.scheduledStart<=:now AND l.scheduledEnd>:now AND l.scheduledEnd>l.scheduledStart AND s.status='ACTIVE' AND s.archivedAt IS NULL AND s.groupId=l.groupId AND s.semesterId=l.semesterId AND g.archivedAt IS NULL AND sem.status='ACTIVE' AND t.archivedAt IS NULL ORDER BY l.scheduledStart LIMIT 1""") suspend fun getStartableLecture(now:Long):LectureEntity?
+    @Query("""SELECT DISTINCT l.* FROM lectures l JOIN subjects s ON s.id=l.subjectId JOIN groups g ON g.id=l.groupId JOIN semesters sem ON sem.id=l.semesterId JOIN teachers t ON t.id=l.teacherId JOIN attendance_policies p ON p.id=s.attendancePolicyId WHERE l.status IN ('READY','SCHEDULED') AND l.scheduledStart<=:now AND l.scheduledEnd>:now AND l.scheduledEnd>l.scheduledStart AND s.status='ACTIVE' AND s.archivedAt IS NULL AND s.groupId=l.groupId AND s.semesterId=l.semesterId AND g.archivedAt IS NULL AND sem.status='ACTIVE' AND t.archivedAt IS NULL AND EXISTS(SELECT 1 FROM users u WHERE u.id=:userId AND u.isActive=1) AND (
+        EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId AND r.name IN ('SYSTEM_OWNER','Administrator'))
+        OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND us.scopeType='TEACHER' AND us.scopeId=l.teacherId)
+        OR EXISTS(SELECT 1 FROM groups gx JOIN sections sec ON sec.id=gx.sectionId JOIN batches b ON b.id=sec.batchId JOIN levels lv ON lv.id=b.levelId JOIN user_scopes us ON us.userId=:userId AND us.active=1 WHERE gx.id=l.groupId AND ((us.scopeType='GROUP' AND us.scopeId=gx.id) OR (us.scopeType='SECTION' AND us.scopeId=sec.id) OR (us.scopeType='BATCH' AND us.scopeId=b.id) OR (us.scopeType='LEVEL' AND us.scopeId=lv.id)))
+    ) ORDER BY l.scheduledStart LIMIT 1""") suspend fun getStartableLectureForUser(userId:String,now:Long):LectureEntity?
     @Query("""SELECT DISTINCT l.* FROM lectures l WHERE l.status IN ('READY','SCHEDULED') AND EXISTS(SELECT 1 FROM users u WHERE u.id=:userId AND u.isActive=1) AND (
         EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId AND r.name IN ('SYSTEM_OWNER','Administrator'))
         OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND us.scopeType='TEACHER' AND us.scopeId=l.teacherId)
@@ -129,7 +144,7 @@ interface CoreDao {
         OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND us.scopeType='TEACHER' AND us.scopeId=l.teacherId)
         OR EXISTS(SELECT 1 FROM groups g JOIN sections sec ON sec.id=g.sectionId JOIN batches b ON b.id=sec.batchId JOIN levels lv ON lv.id=b.levelId JOIN user_scopes us ON us.userId=:userId AND us.active=1 WHERE g.id=l.groupId AND ((us.scopeType='GROUP' AND us.scopeId=g.id) OR (us.scopeType='SECTION' AND us.scopeId=sec.id) OR (us.scopeType='BATCH' AND us.scopeId=b.id) OR (us.scopeType='LEVEL' AND us.scopeId=lv.id)))
         OR EXISTS(SELECT 1 FROM user_scopes us JOIN students st ON us.scopeType='STUDENT' AND us.scopeId=st.id WHERE us.userId=:userId AND us.active=1 AND st.groupId=l.groupId)
-    ) ORDER BY l.scheduledStart LIMIT 1""") fun observeNextLectureForUser(userId:String):Flow<LectureEntity?>
+    ) AND l.scheduledEnd>:now ORDER BY l.scheduledStart LIMIT 1""") fun observeNextLectureForUser(userId:String,now:Long):Flow<LectureEntity?>
     @Query("""SELECT DISTINCT s.* FROM subjects s WHERE s.archivedAt IS NULL AND EXISTS(SELECT 1 FROM users u WHERE u.id=:userId AND u.isActive=1) AND (
         EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId AND r.name IN ('SYSTEM_OWNER','Administrator'))
         OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND us.scopeType='TEACHER' AND us.scopeId=s.teacherId)
@@ -157,16 +172,19 @@ interface CoreDao {
     @Query("SELECT id FROM groups WHERE archivedAt IS NULL") suspend fun getActiveGroupIds():List<String>
     @Query("UPDATE timetables SET isActive=0, updatedAt=:now, version=version+1 WHERE groupId=:groupId AND isActive=1") suspend fun deactivateTimetablesForGroup(groupId:String,now:Long)
     @Query("""UPDATE timetables SET isActive=0, updatedAt=:now, version=version+1 WHERE groupId=:groupId AND isActive=1 AND weeklyScheduleId IN (SELECT id FROM weekly_timetable_versions WHERE groupId=:groupId AND weekStart=:weekStart)""") suspend fun deactivateTimetablesForWeek(groupId:String,weekStart:String,now:Long)
+    @Query("SELECT * FROM lectures WHERE groupId=:groupId AND scheduledStart>=:from AND scheduledStart<:until AND status IN ('SCHEDULED','READY') ORDER BY scheduledStart,id") suspend fun getFutureScheduledLectures(groupId:String,from:Long,until:Long):List<LectureEntity>
     @Query("UPDATE lectures SET status='CANCELLED', updatedAt=:now, version=version+1 WHERE groupId=:groupId AND scheduledStart>=:from AND scheduledStart<:until AND status IN ('SCHEDULED','READY')") suspend fun cancelFutureScheduledLectures(groupId:String,from:Long,until:Long,now:Long)
-    @Query("SELECT COUNT(*) FROM lectures WHERE subjectId=:subjectId AND groupId=:groupId AND scheduledStart=:scheduledStart") suspend fun countLectureAt(subjectId:String,groupId:String,scheduledStart:Long):Int
+    @Query("SELECT COUNT(*) FROM lectures WHERE subjectId=:subjectId AND groupId=:groupId AND scheduledStart=:scheduledStart AND status!='CANCELLED'") suspend fun countNonCancelledLectureAt(subjectId:String,groupId:String,scheduledStart:Long):Int
     @Insert(onConflict=OnConflictStrategy.ABORT) suspend fun insertLecture(v:LectureEntity)
     @Query("SELECT * FROM lectures WHERE id=:id LIMIT 1") suspend fun getLectureById(id:String):LectureEntity?
+    @Query("SELECT * FROM lectures ORDER BY id") suspend fun getLecturesOnce():List<LectureEntity>
     @Query("SELECT * FROM subjects WHERE id=:id LIMIT 1") suspend fun getSubjectById(id:String):SubjectEntity?
     @Query("SELECT * FROM subjects WHERE code=:code AND archivedAt IS NULL LIMIT 1") suspend fun getSubjectByCode(code:String):SubjectEntity?
     @Query("SELECT * FROM subjects WHERE semesterId=:semesterId AND archivedAt IS NULL ORDER BY name") suspend fun getSubjectsForSemester(semesterId:String):List<SubjectEntity>
     @Query("SELECT * FROM subjects WHERE archivedAt IS NULL AND (name LIKE '%' || :q || '%' OR code LIKE '%' || :q || '%') ORDER BY name LIMIT 20") suspend fun searchSubjectsOnce(q:String):List<SubjectEntity>
     @Query("SELECT * FROM attendance_policies WHERE id=:id LIMIT 1") suspend fun getAttendancePolicyById(id:String):AttendancePolicyEntity?
     @Query("SELECT * FROM attendance_policies ORDER BY name") suspend fun getAttendancePolicies():List<AttendancePolicyEntity>
+    @Query("SELECT * FROM attendance_policies ORDER BY name") fun observeAttendancePolicies():Flow<List<AttendancePolicyEntity>>
     @Insert(onConflict=OnConflictStrategy.REPLACE) suspend fun upsertAttendancePolicy(v:AttendancePolicyEntity)
     @Query("SELECT * FROM teachers WHERE id=:id LIMIT 1") suspend fun getTeacherById(id:String):TeacherEntity?
     @Query("SELECT * FROM teachers WHERE archivedAt IS NULL AND normalizedName=:normalized LIMIT 1") suspend fun getTeacherByNormalizedName(normalized:String):TeacherEntity?
@@ -178,25 +196,47 @@ interface CoreDao {
     @Query("SELECT COUNT(*) FROM lectures WHERE semesterId=:semesterId AND status='ACTIVE'") suspend fun countActiveLecturesInSemester(semesterId:String):Int
     @Query("SELECT COUNT(*) FROM attendance_records ar JOIN lectures l ON l.id=ar.lectureId WHERE l.semesterId=:semesterId AND (ar.finalStatus='MANUAL_REVIEW' OR ar.approvalStatus='PENDING')") suspend fun countPendingReviewsInSemester(semesterId:String):Int
     @Query("SELECT * FROM teachers WHERE archivedAt IS NULL ORDER BY normalizedName") fun observeTeachers():Flow<List<TeacherEntity>>
+    @Query("SELECT * FROM teachers ORDER BY id") suspend fun getTeachersOnce():List<TeacherEntity>
     @Insert(onConflict=OnConflictStrategy.ABORT) suspend fun insertTeacher(v:TeacherEntity)
     @Update suspend fun updateTeacher(v:TeacherEntity)
     @Query("SELECT * FROM subjects WHERE archivedAt IS NULL ORDER BY name") fun observeSubjects():Flow<List<SubjectEntity>>
+    @Query("SELECT * FROM subjects ORDER BY id") suspend fun getSubjectsOnce():List<SubjectEntity>
     @Insert(onConflict=OnConflictStrategy.ABORT) suspend fun insertSubject(v:SubjectEntity)
     @Update suspend fun updateSubject(v:SubjectEntity)
     @Insert(onConflict=OnConflictStrategy.IGNORE) suspend fun insertTeacherSubject(v:TeacherSubjectEntity):Long
+    @Query("DELETE FROM teacher_subjects WHERE subjectId=:subjectId") suspend fun deleteTeacherSubjectsForSubject(subjectId:String)
     @Query("SELECT COUNT(*) > 0 FROM teacher_subjects WHERE teacherId=:teacherId AND subjectId=:subjectId") suspend fun isTeacherLinkedToSubject(teacherId:String,subjectId:String):Boolean
     @Query("SELECT COUNT(*) FROM lectures WHERE teacherId=:teacherId") suspend fun countTeacherLectureHistory(teacherId:String):Int
+    @Query("SELECT COUNT(*) FROM subjects WHERE teacherId=:teacherId AND archivedAt IS NULL AND status!='ARCHIVED'") suspend fun countActiveSubjectsForTeacher(teacherId:String):Int
+    @Query("SELECT COUNT(*) FROM timetables WHERE subjectId=:subjectId AND isActive=1") suspend fun countActiveTimetablesForSubject(subjectId:String):Int
     @Query("SELECT COUNT(*) FROM lectures WHERE subjectId=:subjectId") suspend fun countSubjectLectureHistory(subjectId:String):Int
     @Query("SELECT * FROM universities WHERE archivedAt IS NULL ORDER BY name") fun observeUniversities():Flow<List<UniversityEntity>>
+    @Query("SELECT * FROM universities ORDER BY id") suspend fun getUniversitiesOnce():List<UniversityEntity>
+    @Query("SELECT * FROM universities WHERE id=:id LIMIT 1") suspend fun getUniversityById(id:String):UniversityEntity?
     @Query("SELECT * FROM faculties WHERE archivedAt IS NULL ORDER BY name") fun observeFaculties():Flow<List<FacultyEntity>>
+    @Query("SELECT * FROM faculties ORDER BY id") suspend fun getFacultiesOnce():List<FacultyEntity>
+    @Query("SELECT * FROM faculties WHERE id=:id LIMIT 1") suspend fun getFacultyById(id:String):FacultyEntity?
     @Query("SELECT * FROM departments WHERE archivedAt IS NULL ORDER BY name") fun observeDepartments():Flow<List<DepartmentEntity>>
+    @Query("SELECT * FROM departments ORDER BY id") suspend fun getDepartmentsOnce():List<DepartmentEntity>
+    @Query("SELECT * FROM departments WHERE id=:id LIMIT 1") suspend fun getDepartmentById(id:String):DepartmentEntity?
     @Query("SELECT * FROM academic_years ORDER BY startDate DESC") fun observeAcademicYears():Flow<List<AcademicYearEntity>>
-    @Query("SELECT * FROM academic_years ORDER BY startDate DESC") suspend fun getAcademicYearsOnce():List<AcademicYearEntity>
+    @Query("SELECT * FROM academic_years ORDER BY id") suspend fun getAcademicYearsOnce():List<AcademicYearEntity>
     @Query("SELECT * FROM academic_years WHERE id=:id LIMIT 1") suspend fun getAcademicYearById(id:String):AcademicYearEntity?
     @Query("SELECT * FROM levels WHERE archivedAt IS NULL ORDER BY orderIndex") fun observeLevels():Flow<List<LevelEntity>>
+    @Query("SELECT * FROM levels ORDER BY id") suspend fun getLevelsOnce():List<LevelEntity>
+    @Query("SELECT * FROM levels WHERE id=:id LIMIT 1") suspend fun getLevelById(id:String):LevelEntity?
     @Query("SELECT * FROM batches WHERE archivedAt IS NULL ORDER BY name") fun observeBatches():Flow<List<BatchEntity>>
+    @Query("SELECT * FROM batches ORDER BY id") suspend fun getBatchesOnce():List<BatchEntity>
+    @Query("SELECT * FROM batches WHERE id=:id LIMIT 1") suspend fun getBatchById(id:String):BatchEntity?
     @Query("SELECT * FROM sections WHERE archivedAt IS NULL ORDER BY name") fun observeSections():Flow<List<SectionEntity>>
+    @Query("SELECT * FROM sections ORDER BY id") suspend fun getSectionsOnce():List<SectionEntity>
+    @Query("SELECT * FROM sections WHERE id=:id LIMIT 1") suspend fun getSectionById(id:String):SectionEntity?
     @Query("SELECT * FROM groups WHERE archivedAt IS NULL ORDER BY name") fun observeGroups():Flow<List<GroupEntity>>
+    @Query("SELECT * FROM groups ORDER BY id") suspend fun getGroupsOnce():List<GroupEntity>
+    @Query("SELECT * FROM levels WHERE id=:id AND archivedAt IS NULL LIMIT 1") suspend fun getActiveLevelById(id:String):LevelEntity?
+    @Query("SELECT * FROM batches WHERE id=:id AND archivedAt IS NULL LIMIT 1") suspend fun getActiveBatchById(id:String):BatchEntity?
+    @Query("SELECT * FROM sections WHERE id=:id AND archivedAt IS NULL LIMIT 1") suspend fun getActiveSectionById(id:String):SectionEntity?
+    @Query("SELECT * FROM groups WHERE id=:id AND archivedAt IS NULL LIMIT 1") suspend fun getActiveGroupById(id:String):GroupEntity?
     @Query("SELECT * FROM groups WHERE id=:id LIMIT 1") suspend fun getGroupById(id:String):GroupEntity?
     @Insert(onConflict=OnConflictStrategy.ABORT) suspend fun insertUniversity(v:UniversityEntity)
     @Update suspend fun updateUniversity(v:UniversityEntity)
@@ -226,6 +266,7 @@ interface CoreDao {
     ) ORDER BY ar.updatedAt DESC""") fun observeScopedStudentRecords(userId:String,studentId:String):Flow<List<AttendanceRecordEntity>>
     @Query("SELECT * FROM attendance_records WHERE lectureId=:lectureId") suspend fun getLectureRecords(lectureId:String): List<AttendanceRecordEntity>
     @Query("SELECT * FROM attendance_records WHERE id=:id LIMIT 1") suspend fun getAttendanceRecord(id:String):AttendanceRecordEntity?
+    @Query("SELECT * FROM attendance_records ORDER BY id") suspend fun getAttendanceRecordsOnce():List<AttendanceRecordEntity>
     @Query("SELECT * FROM attendance_records WHERE lectureId=:lectureId AND studentId=:studentId LIMIT 1") suspend fun getAttendanceRecord(lectureId:String,studentId:String):AttendanceRecordEntity?
     @Query("SELECT * FROM attendance_records WHERE studentId=:studentId ORDER BY createdAt DESC") fun observeStudentRecords(studentId:String):Flow<List<AttendanceRecordEntity>>
     @Query("SELECT * FROM attendance_records WHERE studentId=:studentId ORDER BY createdAt DESC") suspend fun getStudentRecordsOnce(studentId:String):List<AttendanceRecordEntity>
@@ -249,6 +290,7 @@ interface CoreDao {
     @Insert(onConflict=OnConflictStrategy.IGNORE) suspend fun insertPresenceEvent(v:PresenceEventEntity):Long
     @Insert(onConflict=OnConflictStrategy.REPLACE) suspend fun upsertPresenceInterval(v:PresenceIntervalEntity)
     @Query("SELECT * FROM presence_intervals WHERE attendanceRecordId=:recordId AND endAt IS NULL ORDER BY startAt DESC LIMIT 1") suspend fun getOpenInterval(recordId:String):PresenceIntervalEntity?
+    @Query("SELECT * FROM presence_intervals WHERE attendanceRecordId=:recordId AND endAt IS NULL ORDER BY startAt") suspend fun getOpenIntervals(recordId:String):List<PresenceIntervalEntity>
     @Query("SELECT * FROM presence_intervals WHERE attendanceRecordId=:recordId ORDER BY startAt") suspend fun getIntervals(recordId:String):List<PresenceIntervalEntity>
     @Query("SELECT * FROM presence_events WHERE attendanceSessionId=:sessionId AND studentId=:studentId ORDER BY timestamp") suspend fun getPresenceEvents(sessionId:String,studentId:String):List<PresenceEventEntity>
     @Query("SELECT * FROM presence_events WHERE attendanceSessionId=:sessionId AND studentId=:studentId ORDER BY timestamp DESC LIMIT 1") suspend fun getLastPresenceEvent(sessionId:String,studentId:String):PresenceEventEntity?
@@ -263,7 +305,9 @@ interface CoreDao {
     @Insert(onConflict=OnConflictStrategy.ABORT) suspend fun insertAppeal(v:AttendanceAppealEntity)
     @Update suspend fun updateAppeal(v:AttendanceAppealEntity)
     @Query("SELECT * FROM attendance_appeals WHERE id=:id LIMIT 1") suspend fun getAppeal(id:String):AttendanceAppealEntity?
+    @Query("SELECT COUNT(*) FROM attendance_appeals WHERE attendanceRecordId=:recordId AND status='PENDING'") suspend fun countPendingAppealsForRecord(recordId:String):Int
     @Query("UPDATE attendance_appeals SET syncStatus=:syncStatus, updatedAt=:updatedAt WHERE id=:id") suspend fun updateAppealSyncStatus(id:String,syncStatus:AppealSyncStatus,updatedAt:Long)
+    @Query("UPDATE attendance_appeals SET syncStatus=:syncStatus WHERE id=:id") suspend fun updateAppealSyncStatusOnly(id:String,syncStatus:AppealSyncStatus)
     @Query("SELECT * FROM attendance_appeals WHERE attendanceRecordId=:recordId ORDER BY submittedAt DESC") fun observeAppealsForRecord(recordId:String):Flow<List<AttendanceAppealEntity>>
     @Query("SELECT * FROM attendance_appeals WHERE studentId=:studentId ORDER BY submittedAt DESC") fun observeStudentAppeals(studentId:String):Flow<List<AttendanceAppealEntity>>
     @Query("SELECT * FROM attendance_appeals WHERE (:status IS NULL OR status=:status) ORDER BY submittedAt DESC") fun observeAppeals(status:AppealStatus?):Flow<List<AttendanceAppealEntity>>
@@ -294,11 +338,28 @@ interface CoreDao {
         ) ORDER BY aa.submittedAt DESC""") fun observeScopedAppealReviewRows(userId:String,status:AppealStatus?):Flow<List<AppealReviewRow>>
 
     @Insert(onConflict=OnConflictStrategy.IGNORE) suspend fun enqueueNotification(v:NotificationEntity):Long
-    @Query("SELECT * FROM notifications WHERE (status='PENDING' OR (status='FAILED' AND retryCount<5)) AND scheduledAt<=:now ORDER BY scheduledAt LIMIT :limit") suspend fun pendingNotifications(now:Long,limit:Int=25):List<NotificationEntity>
+    @Query("SELECT * FROM notifications WHERE ((status='PENDING' OR (status='FAILED' AND retryCount<5)) AND scheduledAt<=:now) OR (status='PROCESSING' AND scheduledAt<=:staleBefore) ORDER BY scheduledAt LIMIT :limit") suspend fun pendingNotifications(now:Long,staleBefore:Long=now-900000L,limit:Int=25):List<NotificationEntity>
+    @Query("UPDATE notifications SET status='PROCESSING', scheduledAt=:now, version=version+1 WHERE id=:id AND (status='PENDING' OR (status='FAILED' AND retryCount<5) OR (status='PROCESSING' AND scheduledAt<=:staleBefore))") suspend fun claimNotification(id:String,now:Long,staleBefore:Long=now-900000L):Int
     @Update suspend fun updateNotification(v:NotificationEntity)
 
     @Query("SELECT * FROM teacher_report_settings WHERE enabled=1 ORDER BY teacherId, subjectId") fun observeReportSettings():Flow<List<TeacherReportSettingEntity>>
     @Query("SELECT * FROM teacher_report_settings ORDER BY teacherId,subjectId") fun observeAllReportSettings():Flow<List<TeacherReportSettingEntity>>
+    @Query("""SELECT DISTINCT t.* FROM teachers t WHERE t.archivedAt IS NULL AND EXISTS(SELECT 1 FROM users u WHERE u.id=:userId AND u.isActive=1) AND (
+        EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId AND r.name IN ('SYSTEM_OWNER','Administrator'))
+        OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND us.scopeType='TEACHER' AND us.scopeId=t.id)
+        OR EXISTS(SELECT 1 FROM subjects s JOIN groups g ON g.id=s.groupId JOIN sections sec ON sec.id=g.sectionId JOIN batches b ON b.id=sec.batchId JOIN levels lv ON lv.id=b.levelId
+            JOIN user_scopes us ON us.userId=:userId AND us.active=1 WHERE s.teacherId=t.id AND s.archivedAt IS NULL AND ((us.scopeType='GROUP' AND us.scopeId=g.id) OR (us.scopeType='SECTION' AND us.scopeId=sec.id) OR (us.scopeType='BATCH' AND us.scopeId=b.id) OR (us.scopeType='LEVEL' AND us.scopeId=lv.id)))
+    ) ORDER BY t.fullName""") fun observeReportTeachersForUser(userId:String):Flow<List<TeacherEntity>>
+    @Query("""SELECT DISTINCT s.* FROM subjects s JOIN groups g ON g.id=s.groupId JOIN sections sec ON sec.id=g.sectionId JOIN batches b ON b.id=sec.batchId JOIN levels lv ON lv.id=b.levelId WHERE s.archivedAt IS NULL AND EXISTS(SELECT 1 FROM users u WHERE u.id=:userId AND u.isActive=1) AND (
+        EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId AND r.name IN ('SYSTEM_OWNER','Administrator'))
+        OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND us.scopeType='TEACHER' AND us.scopeId=s.teacherId)
+        OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND ((us.scopeType='GROUP' AND us.scopeId=g.id) OR (us.scopeType='SECTION' AND us.scopeId=sec.id) OR (us.scopeType='BATCH' AND us.scopeId=b.id) OR (us.scopeType='LEVEL' AND us.scopeId=lv.id)))
+    ) ORDER BY s.name""") fun observeReportSubjectsForUser(userId:String):Flow<List<SubjectEntity>>
+    @Query("""SELECT DISTINCT trs.* FROM teacher_report_settings trs LEFT JOIN subjects s ON s.id=trs.subjectId LEFT JOIN groups g ON g.id=s.groupId LEFT JOIN sections sec ON sec.id=g.sectionId LEFT JOIN batches b ON b.id=sec.batchId LEFT JOIN levels lv ON lv.id=b.levelId WHERE EXISTS(SELECT 1 FROM users u WHERE u.id=:userId AND u.isActive=1) AND (
+        EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.roleId WHERE ur.userId=:userId AND r.name IN ('SYSTEM_OWNER','Administrator'))
+        OR EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND us.scopeType='TEACHER' AND us.scopeId=trs.teacherId)
+        OR (trs.subjectId IS NOT NULL AND EXISTS(SELECT 1 FROM user_scopes us WHERE us.userId=:userId AND us.active=1 AND ((us.scopeType='GROUP' AND us.scopeId=g.id) OR (us.scopeType='SECTION' AND us.scopeId=sec.id) OR (us.scopeType='BATCH' AND us.scopeId=b.id) OR (us.scopeType='LEVEL' AND us.scopeId=lv.id))))
+    ) ORDER BY trs.teacherId,trs.subjectId""") fun observeReportSettingsForUser(userId:String):Flow<List<TeacherReportSettingEntity>>
     @Query("SELECT * FROM teacher_report_settings ORDER BY teacherId,subjectId") suspend fun getAllReportSettings():List<TeacherReportSettingEntity>
     @Query("SELECT * FROM teacher_report_settings WHERE enabled=1 ORDER BY teacherId, subjectId") suspend fun getEnabledReportSettings():List<TeacherReportSettingEntity>
     @Insert(onConflict=OnConflictStrategy.REPLACE) suspend fun upsertTeacherReportSetting(v:TeacherReportSettingEntity)
@@ -312,15 +373,32 @@ interface CoreDao {
     ) ORDER BY rj.scheduledAt DESC LIMIT 100""") fun observeScopedReportHistory(userId:String):Flow<List<ReportJobEntity>>
     @Query("SELECT * FROM report_jobs WHERE id=:id LIMIT 1") suspend fun getReportJob(id:String):ReportJobEntity?
     @Query("SELECT * FROM generated_reports WHERE reportJobId=:jobId ORDER BY generatedAt DESC LIMIT 1") suspend fun getGeneratedReport(jobId:String):GeneratedReportEntity?
+    @Query("SELECT * FROM generated_reports WHERE hash=:hash LIMIT 1") suspend fun getGeneratedReportByHash(hash:String):GeneratedReportEntity?
+    @Query("SELECT * FROM generated_reports WHERE filePath=:filePath LIMIT 1") suspend fun getGeneratedReportByFilePath(filePath:String):GeneratedReportEntity?
     @Query("DELETE FROM generated_reports WHERE reportJobId=:jobId") suspend fun deleteGeneratedReports(jobId:String)
     @Insert(onConflict=OnConflictStrategy.IGNORE) suspend fun enqueueReport(v:ReportJobEntity):Long
     @Query("SELECT * FROM report_jobs WHERE (status IN ('SCHEDULED','PENDING_SEND') OR (status='FAILED' AND generatedAt IS NULL AND retryCount<5)) AND scheduledAt<=:now ORDER BY scheduledAt LIMIT :limit") suspend fun pendingReports(now:Long,limit:Int=25):List<ReportJobEntity>
+    @Query("UPDATE report_jobs SET status='GENERATING', errorMessage=:claimMarker, version=version+1 WHERE id=:id AND status=:expectedStatus AND version=:expectedVersion") suspend fun claimReportJob(id:String,expectedStatus:ReportJobStatus,expectedVersion:Long,claimMarker:String):Int
+    @Query("SELECT * FROM report_jobs WHERE status='GENERATING'") suspend fun generatingReports():List<ReportJobEntity>
+    @Query("UPDATE report_jobs SET status=:restoreStatus, errorMessage=NULL, version=version+1 WHERE id=:id AND status='GENERATING' AND version=:expectedVersion AND errorMessage=:claimMarker") suspend fun recoverReportClaim(id:String,expectedVersion:Long,claimMarker:String,restoreStatus:ReportJobStatus):Int
     @Update suspend fun updateReport(v:ReportJobEntity)
-    @Insert(onConflict=OnConflictStrategy.REPLACE) suspend fun upsertGeneratedReport(v:GeneratedReportEntity)
+    @Query("""UPDATE report_jobs SET status=CASE WHEN status IN ('SENT','CANCELLED') THEN status ELSE 'FAILED' END, errorMessage=:error, version=version+1 WHERE teacherId=:teacherId AND (:subjectId IS NULL OR subjectId=:subjectId) AND periodStart<=:lectureAt AND periodEnd>:lectureAt AND status!='CANCELLED'""") suspend fun markReportJobsStaleForLecture(teacherId:String,subjectId:String?,lectureAt:Long,error:String):Int
+    @Insert(onConflict=OnConflictStrategy.ABORT) suspend fun insertGeneratedReport(v:GeneratedReportEntity)
 
     @Insert(onConflict=OnConflictStrategy.IGNORE) suspend fun enqueueSync(v:SyncQueueEntity):Long
-    @Query("SELECT * FROM sync_queue WHERE status='PENDING' OR (status='FAILED' AND retryCount<5) ORDER BY createdAt LIMIT :limit") suspend fun pendingSync(limit:Int=50):List<SyncQueueEntity>
+    @Query("""SELECT * FROM sync_queue WHERE status='PENDING' OR (status='FAILED' AND retryCount<5) ORDER BY CASE entityType WHEN 'Teacher' THEN 5 WHEN 'AttendancePolicy' THEN 5 WHEN 'University' THEN 10 WHEN 'AcademicYear' THEN 10 WHEN 'Faculty' THEN 20 WHEN 'Semester' THEN 20 WHEN 'Department' THEN 30 WHEN 'Level' THEN 40 WHEN 'Batch' THEN 50 WHEN 'Section' THEN 60 WHEN 'Group' THEN 70 WHEN 'Student' THEN 80 WHEN 'Subject' THEN 82 WHEN 'Lecture' THEN 90 WHEN 'AttendanceRecord' THEN 95 WHEN 'AttendanceAppeal' THEN 100 ELSE 98 END, createdAt, id LIMIT :limit""") suspend fun pendingSync(limit:Int=50):List<SyncQueueEntity>
+    @Query("UPDATE sync_queue SET status='PROCESSING', lastAttempt=:claimAt, version=version+1 WHERE id=:id AND status=:expectedStatus AND version=:expectedVersion") suspend fun claimSync(id:String,expectedStatus:QueueStatus,expectedVersion:Long,claimAt:Long):Int
+    @Query("SELECT * FROM sync_queue WHERE status='PROCESSING' AND lastAttempt IS NOT NULL AND lastAttempt<=:staleBefore") suspend fun staleProcessingSync(staleBefore:Long):List<SyncQueueEntity>
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE entityType=:entityType AND entityId=:entityId AND status IN ('PENDING','FAILED','PROCESSING','NEEDS_MANUAL_REVIEW')") suspend fun countUnresolvedSyncForEntity(entityType:String,entityId:String):Int
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE entityType=:entityType AND entityId=:entityId AND status='SENT'") suspend fun countSentSyncForEntity(entityType:String,entityId:String):Int
+    @Query("UPDATE sync_queue SET status='NEEDS_MANUAL_REVIEW', error=:error, version=version+1 WHERE entityType=:entityType AND entityId=:entityId AND status IN ('PENDING','FAILED','PROCESSING')") suspend fun markEntitySyncConflict(entityType:String,entityId:String,error:String):Int
+    @Query("UPDATE sync_queue SET status=:restoreStatus, error='SYNC_CLAIM_RECOVERED', version=version+1 WHERE id=:id AND status='PROCESSING' AND version=:expectedVersion AND lastAttempt=:claimAt") suspend fun recoverSyncClaim(id:String,expectedVersion:Long,claimAt:Long,restoreStatus:QueueStatus):Int
     @Update suspend fun updateSync(v:SyncQueueEntity)
+    @Query("SELECT * FROM sync_entity_metadata WHERE entityType=:entityType AND entityId=:entityId LIMIT 1") suspend fun getSyncEntityMetadata(entityType:String,entityId:String):SyncEntityMetadataEntity?
+    @Insert(onConflict=OnConflictStrategy.IGNORE) suspend fun insertSyncEntityMetadata(v:SyncEntityMetadataEntity):Long
+    @Update suspend fun updateSyncEntityMetadata(v:SyncEntityMetadataEntity)
+    @Query("UPDATE sync_entity_metadata SET lastSyncedServerVersion=:serverVersion WHERE entityType=:entityType AND entityId=:entityId") suspend fun markSyncEntityServerVersion(entityType:String,entityId:String,serverVersion:Long):Int
+    @Query("SELECT * FROM sync_entity_metadata ORDER BY entityType,entityId") suspend fun getAllSyncEntityMetadata():List<SyncEntityMetadataEntity>
 
     @Insert(onConflict=OnConflictStrategy.REPLACE) suspend fun upsertSetting(v:AppSettingEntity)
     @Query("SELECT * FROM app_settings WHERE key=:key LIMIT 1") suspend fun getSetting(key:String):AppSettingEntity?
@@ -344,13 +422,14 @@ interface CoreDao {
     @Query("SELECT error FROM notifications WHERE error IS NOT NULL ORDER BY COALESCE(sentAt,scheduledAt) DESC LIMIT 5") suspend fun getRecentNotificationErrors():List<String>
     @Query("SELECT errorMessage FROM report_jobs WHERE errorMessage IS NOT NULL ORDER BY scheduledAt DESC LIMIT 5") suspend fun getRecentReportErrors():List<String>
     @Query("SELECT COUNT(*) FROM students WHERE archivedAt IS NULL AND (levelId IS NULL OR batchId IS NULL OR sectionId IS NULL OR groupId IS NULL)") suspend fun countStudentsWithoutScope():Int
-    @Query("SELECT COUNT(*) FROM students st LEFT JOIN levels l ON l.id=st.levelId LEFT JOIN batches b ON b.id=st.batchId LEFT JOIN sections se ON se.id=st.sectionId LEFT JOIN groups g ON g.id=st.groupId WHERE st.archivedAt IS NULL AND (st.levelId IS NULL OR st.batchId IS NULL OR st.sectionId IS NULL OR st.groupId IS NULL OR l.id IS NULL OR b.id IS NULL OR se.id IS NULL OR g.id IS NULL)") suspend fun countStudentsWithInvalidScope():Int
+    @Query("SELECT COUNT(*) FROM students st LEFT JOIN levels l ON l.id=st.levelId LEFT JOIN batches b ON b.id=st.batchId LEFT JOIN sections se ON se.id=st.sectionId LEFT JOIN groups g ON g.id=st.groupId WHERE st.archivedAt IS NULL AND (st.levelId IS NULL OR st.batchId IS NULL OR st.sectionId IS NULL OR st.groupId IS NULL OR l.id IS NULL OR b.id IS NULL OR se.id IS NULL OR g.id IS NULL OR l.archivedAt IS NOT NULL OR b.archivedAt IS NOT NULL OR se.archivedAt IS NOT NULL OR g.archivedAt IS NOT NULL OR b.levelId!=st.levelId OR se.batchId!=st.batchId OR g.sectionId!=st.sectionId)") suspend fun countStudentsWithInvalidScope():Int
     @Query("SELECT COUNT(*) FROM teacher_subjects ts LEFT JOIN teachers t ON t.id=ts.teacherId LEFT JOIN subjects s ON s.id=ts.subjectId WHERE t.id IS NULL OR s.id IS NULL") suspend fun countBrokenTeacherSubjectRelations():Int
     @Query("SELECT COUNT(*) FROM subjects s LEFT JOIN teachers t ON t.id=s.teacherId WHERE s.archivedAt IS NULL AND s.teacherId IS NOT NULL AND (t.id IS NULL OR t.archivedAt IS NOT NULL)") suspend fun countSubjectsWithInvalidTeacher():Int
     @Query("SELECT COUNT(*) FROM timetables tt JOIN subjects s ON s.id=tt.subjectId WHERE tt.isActive=1 AND s.archivedAt IS NOT NULL") suspend fun countTimetablesUsingArchivedSubject():Int
     @Query("SELECT COUNT(*) FROM report_jobs r WHERE (r.status='SENT' AND r.sentAt IS NULL) OR (r.status='PENDING_APPROVAL' AND r.generatedAt IS NULL) OR r.periodStart>r.periodEnd") suspend fun countInconsistentReportJobs():Int
     @Query("SELECT COUNT(*) FROM students WHERE universityNumber IS NOT NULL GROUP BY universityNumber HAVING COUNT(*)>1") suspend fun duplicateUniversityNumberGroups():List<Int>
     @Query("SELECT COUNT(*) FROM subjects WHERE archivedAt IS NULL AND teacherId IS NULL") suspend fun countSubjectsWithoutTeacher():Int
+    @Query("SELECT COUNT(*) FROM subjects s LEFT JOIN attendance_policies p ON p.id=s.attendancePolicyId WHERE s.archivedAt IS NULL AND (s.attendancePolicyId IS NULL OR p.id IS NULL)") suspend fun countSubjectsWithInvalidAttendancePolicy():Int
     @Query("SELECT COUNT(*) FROM attendance_records ar LEFT JOIN lectures l ON l.id=ar.lectureId LEFT JOIN students s ON s.id=ar.studentId WHERE l.id IS NULL OR s.id IS NULL") suspend fun countOrphanAttendance():Int
     @Query("SELECT COUNT(*) FROM attendance_appeals aa LEFT JOIN attendance_records ar ON ar.id=aa.attendanceRecordId WHERE ar.id IS NULL") suspend fun countOrphanAppeals():Int
     @Query("SELECT COUNT(*) FROM student_devices WHERE status='ACTIVE' GROUP BY studentId HAVING COUNT(*)>1") suspend fun multipleActiveDeviceGroups():List<Int>

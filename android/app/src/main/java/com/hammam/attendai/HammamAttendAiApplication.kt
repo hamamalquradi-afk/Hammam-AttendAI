@@ -14,7 +14,7 @@ class HammamAttendAiApplication:Application(){
         startupScope.launch{
             container.authorization.seedAuthorizationModel()
             val initialized=container.preferences.firstRunComplete.first()
-            val ownerExists=container.database.coreDao().getSystemOwnerUser()!=null
+            val ownerExists=container.database.coreDao().getAnySystemOwnerUser()!=null
             container.preferences.setOwnerSetupRequired(initialized && !ownerExists)
         }
     }

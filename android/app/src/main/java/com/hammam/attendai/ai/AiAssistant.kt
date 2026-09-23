@@ -18,13 +18,15 @@ sealed interface SafeIntent {
 
 class OfflineIntentParser {
     fun parse(text:String):SafeIntent{
-        val n=ArabicNormalizer.normalize(text)
+        val raw=text.trim()
+        val n=ArabicNormalizer.normalize(raw)
+        val lower=raw.lowercase()
         return when {
-            "يحتاج" in n && "مراجعه" in n -> SafeIntent.NeedsReview
-            ("غائب" in n || "غياب" in n) && "اليوم" in n -> SafeIntent.AbsentToday
-            "متاخر" in n && "اليوم" in n -> SafeIntent.LateToday
-            "سجل" in n || "نسبه حضور" in n || Regex("\\d{5,}").containsMatchIn(n) -> SafeIntent.StudentAttendance(text.trim())
-            "احصائيات" in n || "لخص حضور" in n -> SafeIntent.SubjectStatistics(text.trim())
+            ("يحتاج" in n && "مراجعه" in n) || "needs review" in lower || "need review" in lower -> SafeIntent.NeedsReview
+            (("غائب" in n || "غياب" in n) && "اليوم" in n) || (("absent" in lower || "absence" in lower) && "today" in lower) -> SafeIntent.AbsentToday
+            ("متاخر" in n && "اليوم" in n) || ("late" in lower && "today" in lower) -> SafeIntent.LateToday
+            "سجل" in n || "نسبه حضور" in n || "attendance record" in lower || "attendance rate" in lower || Regex("\\d{5,}").containsMatchIn(n) -> SafeIntent.StudentAttendance(raw)
+            "احصائيات" in n || "لخص حضور" in n || "attendance statistics" in lower || "attendance summary" in lower -> SafeIntent.SubjectStatistics(raw)
             else -> SafeIntent.Unknown
         }
     }
@@ -91,27 +93,71 @@ class RoomAttendanceQueryTools(
     private suspend fun reportStats(subjectId:String?,start:Long,end:Long):Map<String,Any?> { val r=dao.getReportRecords(subjectId,start,end);return mapOf("subjectId" to subjectId,"periodStart" to start,"periodEnd" to end,"records" to r.size,"attendanceRate" to if(r.isEmpty())0.0 else r.map{it.attendancePercentage}.average(),"absent" to r.count{it.finalStatus==FinalAttendanceStatus.ABSENT},"late" to r.count{it.finalStatus==FinalAttendanceStatus.LATE},"partial" to r.count{it.finalStatus==FinalAttendanceStatus.PARTIAL},"leftEarly" to r.count{it.finalStatus==FinalAttendanceStatus.LEFT_EARLY}) }
 }
 
-data class AssistantAnswer(val text:String,val periodStart:Long?,val periodEnd:Long?,val groundedFacts:Map<String,Any?>)
+enum class AssistantReplyCode{
+    STUDENT_NOT_FOUND,
+    STUDENT_AMBIGUOUS,
+    STUDENT_ATTENDANCE,
+    ABSENT_TODAY,
+    LATE_TODAY,
+    NEEDS_REVIEW,
+    SUBJECT_SELECTION_REQUIRED,
+    LOCAL_CAPABILITIES,
+}
+
+data class AssistantAnswer(
+    val replyCode:AssistantReplyCode,
+    val values:Map<String,String> = emptyMap(),
+    val periodStart:Long?=null,
+    val periodEnd:Long?=null,
+    val groundedFacts:Map<String,Any?> = emptyMap(),
+)
 
 class OfflineAssistantEngine(private val parser:OfflineIntentParser,private val tools:AttendanceQueryTools){
     suspend fun answer(query:String,nowMillis:Long=System.currentTimeMillis(),zone:ZoneId=ZoneId.systemDefault()):AssistantAnswer{
-        val day=Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate();val start=day.atStartOfDay(zone).toInstant().toEpochMilli();val end=day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val day=Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+        val start=day.atStartOfDay(zone).toInstant().toEpochMilli()
+        val end=day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         return when(val intent=parser.parse(query)){
             is SafeIntent.StudentAttendance->{
-                val search=Regex("\\d{5,}").find(query)?.value ?: query.replace(Regex("(?i)(سجل|نسبة|نسبه|حضور|الطالب|اعرض)")," ").trim()
+                val search=Regex("\\d{5,}").find(query)?.value ?: query.replace(Regex("(?i)(سجل|نسبة|نسبه|حضور|الطالب|اعرض|attendance|record|rate|student|show)")," ").trim()
                 val matches=tools.searchStudents(search)
-                if(matches.isEmpty())AssistantAnswer("لم أجد طالبًا مطابقًا في قاعدة البيانات المحلية.",null,null,emptyMap())
-                else if(matches.size>1)AssistantAnswer("وجدت أكثر من طالب مطابق. حدّد الاسم أو الرقم الجامعي بدقة.",null,null,mapOf("matches" to matches.take(10)))
-                else {val facts=tools.getStudentAttendance(matches.first()["id"].toString());AssistantAnswer("${facts["studentName"]}: الحضور ${facts["present"]}، الغياب ${facts["absent"]}، التأخير ${facts["late"]}، الحضور الجزئي ${facts["partial"]}، نسبة الحضور ${"%.1f".format((facts["attendanceRate"] as Double)*100)}%.",null,null,facts)}
+                if(matches.isEmpty())AssistantAnswer(AssistantReplyCode.STUDENT_NOT_FOUND)
+                else if(matches.size>1)AssistantAnswer(AssistantReplyCode.STUDENT_AMBIGUOUS,groundedFacts=mapOf("matches" to matches.take(10)))
+                else {
+                    val facts=tools.getStudentAttendance(matches.first()["id"].toString())
+                    val rate=((facts["attendanceRate"] as? Number)?.toDouble()?:0.0)*100.0
+                    AssistantAnswer(
+                        AssistantReplyCode.STUDENT_ATTENDANCE,
+                        values=mapOf(
+                            "studentName" to facts["studentName"].toString(),
+                            "present" to facts["present"].toString(),
+                            "absent" to facts["absent"].toString(),
+                            "late" to facts["late"].toString(),
+                            "partial" to facts["partial"].toString(),
+                            "attendanceRate" to String.format(java.util.Locale.ROOT,"%.1f",rate),
+                        ),
+                        groundedFacts=facts,
+                    )
+                }
             }
-            SafeIntent.AbsentToday->{val facts=tools.getAbsenceSummary(start,end);AssistantAnswer("عدد سجلات الغياب اليوم: ${facts["count"]}.",start,end,facts)}
-            SafeIntent.LateToday->{val rows=tools.getLateStudents(start,end);AssistantAnswer("عدد المتأخرين اليوم: ${rows.size}.",start,end,mapOf("rows" to rows))}
-            SafeIntent.NeedsReview->{val rows=tools.getNeedsReview(start,end);AssistantAnswer("الحالات التي تحتاج مراجعة اليوم: ${rows.size}.",start,end,mapOf("rows" to rows))}
+            SafeIntent.AbsentToday->{
+                val facts=tools.getAbsenceSummary(start,end)
+                AssistantAnswer(AssistantReplyCode.ABSENT_TODAY,mapOf("count" to facts["count"].toString()),start,end,facts)
+            }
+            SafeIntent.LateToday->{
+                val rows=tools.getLateStudents(start,end)
+                AssistantAnswer(AssistantReplyCode.LATE_TODAY,mapOf("count" to rows.size.toString()),start,end,mapOf("rows" to rows))
+            }
+            SafeIntent.NeedsReview->{
+                val rows=tools.getNeedsReview(start,end)
+                AssistantAnswer(AssistantReplyCode.NEEDS_REVIEW,mapOf("count" to rows.size.toString()),start,end,mapOf("rows" to rows))
+            }
             is SafeIntent.SubjectStatistics->{
-                val monthStart=day.withDayOfMonth(1).atStartOfDay(zone).toInstant().toEpochMilli();val monthEnd=day.withDayOfMonth(1).plusMonths(1).atStartOfDay(zone).toInstant().toEpochMilli()
-                AssistantAnswer("حدد المادة من واجهة التقارير أو استخدم معرف المادة للحصول على إحصائية دقيقة.",monthStart,monthEnd,emptyMap())
+                val monthStart=day.withDayOfMonth(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                val monthEnd=day.withDayOfMonth(1).plusMonths(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                AssistantAnswer(AssistantReplyCode.SUBJECT_SELECTION_REQUIRED,periodStart=monthStart,periodEnd=monthEnd)
             }
-            SafeIntent.Unknown->AssistantAnswer("يمكنني محليًا عرض سجل طالب، عدد الغياب اليوم، المتأخرين اليوم، والحالات التي تحتاج مراجعة. لا أغيّر البيانات من المساعد.",null,null,emptyMap())
+            SafeIntent.Unknown->AssistantAnswer(AssistantReplyCode.LOCAL_CAPABILITIES)
         }
     }
 }

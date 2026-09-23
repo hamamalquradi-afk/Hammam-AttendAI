@@ -10,6 +10,7 @@ kotlinc \
  "$ROOT/android/app/src/main/java/com/hammam/attendai/domain/attendance/AntiFraudEngine.kt" \
  "$ROOT/android/app/src/main/java/com/hammam/attendai/domain/attendance/SessionClockGuard.kt" \
  "$ROOT/android/app/src/main/java/com/hammam/attendai/security/Pbkdf2Sha256.kt" \
+ "$ROOT/android/app/src/main/java/com/hammam/attendai/ble/BleRuntimePolicy.kt" \
  "$ROOT/android/app/src/main/java/com/hammam/attendai/ble/RotatingPresenceToken.kt" \
  "$ROOT/scripts/CoreValidation.kt" -include-runtime -d "$OUT/core.jar"
 java -jar "$OUT/core.jar"

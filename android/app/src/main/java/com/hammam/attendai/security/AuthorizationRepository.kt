@@ -39,15 +39,30 @@ class AuthorizationRepository(private val db:HammamDatabase){
         val subject=job.subjectId?.let{dao.getSubjectById(it)}?:return false
         return canAccessGroup(userId,subject.groupId)
     }
+    suspend fun canAccessReportTarget(userId:String?,teacherId:String,subjectId:String?):Boolean {
+        if(userId==null || !dao.isUserActive(userId))return false
+        if(isGlobal(userId))return true
+        if(dao.hasExactScope(userId,"TEACHER",teacherId))return true
+        val subject=subjectId?.let{dao.getSubjectById(it)}?:return false
+        if(subject.teacherId!=teacherId)return false
+        return canAccessGroup(userId,subject.groupId)
+    }
     suspend fun isGlobal(userId:String):Boolean = dao.isUserActive(userId) && dao.getRoleNames(userId).any{it=="SYSTEM_OWNER" || it=="Administrator"}
     suspend fun isSystemOwner(userId:String):Boolean = dao.getRoleNames(userId).contains("SYSTEM_OWNER")
     suspend fun roleNames(userId:String):List<String> = dao.getRoleNames(userId)
     fun observeRoleNames(userId:String):Flow<List<String>> = dao.observeRoleNames(userId)
     fun observePermissionGrants(userId:String)=dao.observePermissionGrants(userId)
 
+    suspend fun recordLocalSessionRestore(userId:String){
+        require(dao.isUserActive(userId)){"USER_DISABLED"}
+        val roles=dao.getRoleNames(userId)
+        require(roles.isNotEmpty()){ "USER_ROLE_REQUIRED" }
+        dao.insertAudit(AuditLogEntity(UUID.randomUUID().toString(),userId,"LOCAL_SESSION_RESTORED","User",userId,null,"{\"role\":\"${LocalAccessRules.primaryRole(roles).orEmpty()}\"}","Explicit local session recovery",System.currentTimeMillis(),LocalAccessRules.primaryRole(roles)))
+    }
+
     suspend fun createInitialOwner(displayName:String):String = db.withTransaction {
         seedAuthorizationModelInTransaction()
-        check(dao.countUsers()==0){"INITIAL_OWNER_ALREADY_EXISTS"}
+        check(FirstRunBootstrapRules.canCreateBootstrapOwner(dao.countUsers(),dao.getAnySystemOwnerUser()!=null)){"INITIAL_OWNER_ALREADY_EXISTS"}
         createUserWithRole(displayName,"SYSTEM_OWNER",null,null)
     }
 
@@ -129,7 +144,7 @@ class AuthorizationRepository(private val db:HammamDatabase){
 
     suspend fun claimUpgradeSystemOwner(actorId:String){
         require(dao.isUserActive(actorId)){"USER_DISABLED"}
-        require(dao.getSystemOwnerUser()==null){"SYSTEM_OWNER_ALREADY_EXISTS"}
+        require(dao.getAnySystemOwnerUser()==null){"SYSTEM_OWNER_ALREADY_EXISTS"}
         require(dao.getRoleNames(actorId).contains("Administrator")){"ADMINISTRATOR_REQUIRED"}
         db.withTransaction{
             val roleId=dao.getRoleIdByName("SYSTEM_OWNER")?:error("SYSTEM_OWNER_ROLE_NOT_SEEDED")

@@ -1,38 +1,41 @@
 package com.hammam.attendai.ble
 
-import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.bluetooth.BluetoothManager
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import androidx.core.content.ContextCompat
 import com.hammam.attendai.HammamAttendAiApplication
 import com.hammam.attendai.MainActivity
 import com.hammam.attendai.R
 import com.hammam.attendai.domain.model.DeviceStatus
 import com.hammam.attendai.domain.model.LectureStatus
+import com.hammam.attendai.domain.model.StudentStatus
+import com.hammam.attendai.security.LocalAccessRules
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 
 class StudentPresenceService:Service(){
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Default)
     private var presenceJob:Job?=null
+    private var transitionJob:Job?=null
+    private val presenceGeneration=AtomicLong(0)
     private val advertiser by lazy{StudentBleAdvertiser(this)}
 
     override fun onCreate(){
@@ -44,20 +47,25 @@ class StudentPresenceService:Service(){
     }
 
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{
-        if(intent?.action==ACTION_STOP){stopPresence();return START_NOT_STICKY}
-        if(presenceJob?.isActive==true)return START_NOT_STICKY
+        if(intent?.action==ACTION_STOP){stopPresence(clearError=true);return START_NOT_STICKY}
+        if(presenceJob?.isActive==true || transitionJob?.isActive==true)return START_NOT_STICKY
         val studentId=intent?.getStringExtra(EXTRA_STUDENT_ID)
         val deviceId=intent?.getStringExtra(EXTRA_DEVICE_ID)
         val lectureId=intent?.getStringExtra(EXTRA_LECTURE_ID)
-        if(studentId.isNullOrBlank()||deviceId.isNullOrBlank()||lectureId.isNullOrBlank()){
+        val startContext=PresenceStartContextRules.resolve(studentId,deviceId,lectureId) ?: run{
             reportError("PRESENCE_START_CONTEXT_MISSING");stopSelf();return START_NOT_STICKY
         }
         if(!startForegroundSafely()){
             reportError("PRESENCE_FOREGROUND_START_FAILED");stopSelf();return START_NOT_STICKY
         }
-        presenceJob?.cancel()
-        _error.value=null
-        presenceJob=scope.launch{runPresenceLoop(studentId,deviceId,lectureId)}
+        val generation=presenceGeneration.incrementAndGet()
+        transitionJob=scope.launch{
+            val previous=presenceJob
+            previous?.cancelAndJoin()
+            if(!isActive)return@launch
+            _error.value=null
+            presenceJob=launch{runPresenceLoop(startContext.studentId,startContext.deviceId,startContext.lectureId,generation)}
+        }
         return START_NOT_STICKY
     }
 
@@ -78,20 +86,35 @@ class StudentPresenceService:Service(){
         return runCatching{ServiceCompat.startForeground(this,NOTIFICATION_ID,notification,type);true}.getOrDefault(false)
     }
 
-    private suspend fun runPresenceLoop(studentId:String,deviceId:String,lectureId:String){
+    private suspend fun runPresenceLoop(studentId:String,deviceId:String,lectureId:String,generation:Long){
         val container=(application as HammamAttendAiApplication).container
         val dao=container.database.coreDao()
         try{
             while(scope.isActive){
-                val student=dao.getStudentById(studentId)?:return reportError("STUDENT_PROFILE_NOT_LINKED")
-                val device=dao.getStudentDevice(deviceId)?.takeIf{it.studentId==studentId&&it.status==DeviceStatus.ACTIVE}?:return reportError("ACTIVE_DEVICE_REQUIRED")
+                if(dao.isFeatureEnabled("BLE_ATTENDANCE")!=true)return reportError("BLE_ATTENDANCE_DISABLED")
+                val currentUserId=container.preferences.userId.first()?:return reportError("LOCAL_SESSION_REQUIRED")
+                val currentUser=dao.getUserById(currentUserId)?.takeIf{it.isActive}?:return reportError("LOCAL_SESSION_INVALID")
+                val primaryRole=LocalAccessRules.primaryRole(dao.getRoleNames(currentUser.id))
+                if(primaryRole!="Student")return reportError("STUDENT_ROLE_REQUIRED")
+                val sessionStudent=dao.getStudentForUser(currentUser.id)?.takeIf{it.status==StudentStatus.ACTIVE}?:return reportError("STUDENT_PROFILE_NOT_LINKED")
+                if(sessionStudent.id!=studentId)return reportError("LOCAL_SESSION_INVALID")
+                val student=dao.getStudentById(studentId)?.takeIf{it.status==StudentStatus.ACTIVE}?:return reportError("STUDENT_NOT_ACTIVE")
+                val device=dao.getStudentDevice(deviceId)?.takeIf{it.studentId==studentId&&it.status==DeviceStatus.ACTIVE&&student.registeredDeviceId==it.id}?:return reportError("ACTIVE_DEVICE_REQUIRED")
                 val lecture=dao.getLectureById(lectureId)?.takeIf{it.status==LectureStatus.ACTIVE&&it.groupId==student.groupId}?:return reportError("NO_ACTIVE_LECTURE")
-                if(!bluetoothReady())return reportError("BLE_ADVERTISE_UNAVAILABLE")
+                if(dao.getAttendanceRecord(lecture.id,student.id)==null)return reportError("STUDENT_NOT_IN_ATTENDANCE_ROSTER")
+                val readiness=BlePlatformReadiness.advertiseError(this)
+                if(readiness!=null)return reportError(readiness)
                 val token=container.devices.rotatingToken(device.id)?:return reportError("BLE_TOKEN_UNAVAILABLE")
-                if(!advertiser.start(token){code->reportError("BLE_ADVERTISE_FAILED_$code");presenceJob?.cancel()})return reportError("BLE_ADVERTISE_UNAVAILABLE")
+                if(!advertiser.start(token){code->
+                        if(presenceGeneration.get()==generation){reportError("BLE_ADVERTISE_FAILED_$code");presenceJob?.cancel()}
+                    })return reportError(BlePlatformReadiness.advertiseError(this)?:"BLE_ADVERTISE_UNAVAILABLE")
                 _active.value=true
                 delay(20_000)
             }
+        }catch(e:kotlinx.coroutines.CancellationException){throw e
+        }catch(e:Exception){
+            android.util.Log.e("StudentPresenceService","PRESENCE_LOOP_FAILED:${e.javaClass.simpleName}")
+            reportError("PRESENCE_RUNTIME_FAILED")
         }finally{
             advertiser.stop();_active.value=false
             ServiceCompat.stopForeground(this,ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -99,20 +122,13 @@ class StudentPresenceService:Service(){
         }
     }
 
-    private fun bluetoothReady():Boolean{
-        if(Build.VERSION.SDK_INT>=31){
-            if(ContextCompat.checkSelfPermission(this,Manifest.permission.BLUETOOTH_ADVERTISE)!=PackageManager.PERMISSION_GRANTED)return false
-            if(ContextCompat.checkSelfPermission(this,Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED)return false
-        }
-        return runCatching{
-            val adapter=(getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter?:return@runCatching false
-            adapter.isEnabled && adapter.bluetoothLeAdvertiser!=null
-        }.getOrDefault(false)
-    }
-
     private fun reportError(code:String){_error.value=code;_active.value=false}
-    private fun stopPresence(){presenceJob?.cancel();presenceJob=null;advertiser.stop();_active.value=false;ServiceCompat.stopForeground(this,ServiceCompat.STOP_FOREGROUND_REMOVE);stopSelf()}
-    override fun onDestroy(){presenceJob?.cancel();advertiser.stop();_active.value=false;scope.cancel();super.onDestroy()}
+    private fun stopPresence(clearError:Boolean){
+        presenceGeneration.incrementAndGet();transitionJob?.cancel();presenceJob?.cancel();presenceJob=null;advertiser.stop();_active.value=false
+        if(clearError)_error.value=null
+        ServiceCompat.stopForeground(this,ServiceCompat.STOP_FOREGROUND_REMOVE);stopSelf()
+    }
+    override fun onDestroy(){transitionJob?.cancel();presenceJob?.cancel();advertiser.stop();_active.value=false;ServiceCompat.stopForeground(this,ServiceCompat.STOP_FOREGROUND_REMOVE);scope.cancel();super.onDestroy()}
     override fun onBind(intent:Intent?):IBinder?=null
 
     companion object{
@@ -124,5 +140,6 @@ class StudentPresenceService:Service(){
         private const val NOTIFICATION_ID=4202
         private val _active=MutableStateFlow(false);val active=_active.asStateFlow()
         private val _error=MutableStateFlow<String?>(null);val error=_error.asStateFlow()
+        fun clearRuntimeError(){_error.value=null}
     }
 }

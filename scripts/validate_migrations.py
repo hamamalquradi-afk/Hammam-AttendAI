@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Representative SQLite migration validation for Hammam AttendAI v1->v4.
+"""Representative SQLite migration validation for Hammam AttendAI v1->v5.
 This validates migration SQL/data preservation without Android/Room runtime; Room compilation remains a later Gradle check.
 """
 import sqlite3, sys
@@ -30,6 +30,11 @@ M34=[
 "ALTER TABLE audit_logs ADD COLUMN actorRole TEXT",
 "CREATE INDEX IF NOT EXISTS index_audit_logs_entityType_entityId_timestamp ON audit_logs(entityType,entityId,timestamp)",
 ]
+M45=[
+"""CREATE TABLE IF NOT EXISTS sync_entity_metadata (entityType TEXT NOT NULL,entityId TEXT NOT NULL,localVersion INTEGER NOT NULL,firstSeenAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,payloadFingerprint TEXT NOT NULL,lastSyncedServerVersion INTEGER,PRIMARY KEY(entityType,entityId))""",
+"CREATE INDEX IF NOT EXISTS index_sync_entity_metadata_entityType ON sync_entity_metadata(entityType)",
+"CREATE INDEX IF NOT EXISTS index_sync_entity_metadata_updatedAt ON sync_entity_metadata(updatedAt)",
+]
 
 def cols(db,table): return [r[1] for r in db.execute(f'PRAGMA table_info({table})')]
 def idx(db,table): return {r[1] for r in db.execute(f'PRAGMA index_list({table})')}
@@ -43,6 +48,8 @@ def create_base(version:int,with_data=True):
     CREATE TABLE user_roles(userId TEXT,roleId TEXT,PRIMARY KEY(userId,roleId),FOREIGN KEY(userId) REFERENCES users(id),FOREIGN KEY(roleId) REFERENCES roles(id));
     CREATE TABLE role_permissions(roleId TEXT,permissionId TEXT,PRIMARY KEY(roleId,permissionId),FOREIGN KEY(roleId) REFERENCES roles(id),FOREIGN KEY(permissionId) REFERENCES permissions(id));
     CREATE TABLE students(id TEXT PRIMARY KEY,universityNumber TEXT UNIQUE,fullName TEXT);
+    CREATE TABLE teachers(id TEXT PRIMARY KEY,fullName TEXT,normalizedName TEXT,phone TEXT,whatsapp TEXT,email TEXT,preferredNotificationChannel TEXT,notificationsEnabled INTEGER,createdAt INTEGER,updatedAt INTEGER,archivedAt INTEGER,version INTEGER);
+    CREATE TABLE attendance_policies(id TEXT PRIMARY KEY,name TEXT,scopeType TEXT,scopeId TEXT,fullAttendanceThreshold REAL,partialAttendanceThreshold REAL,lateAfterMinutes INTEGER,earlyLeaveThresholdMinutes INTEGER,absenceThreshold REAL,temporaryMissingGraceSeconds INTEGER,minimumPresenceVerificationSeconds INTEGER,confidenceThreshold REAL,createdAt INTEGER,updatedAt INTEGER,version INTEGER);
     CREATE TABLE subjects(id TEXT PRIMARY KEY,name TEXT);
     CREATE TABLE lectures(id TEXT PRIMARY KEY,subjectId TEXT NOT NULL,FOREIGN KEY(subjectId) REFERENCES subjects(id));
     CREATE TABLE attendance_records(id TEXT PRIMARY KEY,lectureId TEXT NOT NULL,studentId TEXT NOT NULL,finalStatus TEXT,attendancePercentage REAL,FOREIGN KEY(lectureId) REFERENCES lectures(id),FOREIGN KEY(studentId) REFERENCES students(id));
@@ -62,7 +69,7 @@ def create_base(version:int,with_data=True):
         for n,c in [('studentId','studentId'),('attendanceRecordId','attendanceRecordId'),('lectureId','lectureId'),('subjectId','subjectId'),('status','status'),('syncStatus','syncStatus'),('submittedAt','submittedAt')]: db.execute(f'CREATE INDEX index_attendance_appeals_{n} ON attendance_appeals({c})')
     if with_data:
         db.execute("INSERT INTO users VALUES('u1','owner','Owner',1,1,1,1)");db.execute("INSERT INTO roles VALUES('r1','SYSTEM_OWNER',NULL)");db.execute("INSERT INTO permissions VALUES('p1','VIEW_STUDENTS',NULL)");db.execute("INSERT INTO user_roles VALUES('u1','r1')");db.execute("INSERT INTO role_permissions VALUES('r1','p1')")
-        db.execute("INSERT INTO students VALUES('s1','2026001','Student One')");db.execute("INSERT INTO subjects VALUES('sub1','Anatomy')");db.execute("INSERT INTO lectures VALUES('l1','sub1')");db.execute("INSERT INTO attendance_records VALUES('ar1','l1','s1','PRESENT',100.0)")
+        db.execute("INSERT INTO students VALUES('s1','2026001','Student One')");db.execute("INSERT INTO teachers VALUES('t1','Teacher One','teacher one',NULL,NULL,NULL,NULL,1,10,10,NULL,1)");db.execute("INSERT INTO attendance_policies VALUES('pol1','Global','GLOBAL',NULL,0.8,0.5,10,5,0.2,30,60,0.7,10,10,1)");db.execute("INSERT INTO subjects VALUES('sub1','Anatomy')");db.execute("INSERT INTO lectures VALUES('l1','sub1')");db.execute("INSERT INTO attendance_records VALUES('ar1','l1','s1','PRESENT',100.0)")
         db.execute("INSERT INTO report_jobs VALUES('rp1','SENT','dedup-1')");db.execute("INSERT INTO app_settings VALUES('setting1','ciphertext',100)");db.execute("INSERT INTO timetables VALUES('tt1','sub1','t1','g1',1,'08:00','09:00')");db.execute("INSERT INTO audit_logs VALUES('au1','u1','TEST','Student','s1',NULL,NULL,NULL,100)")
         if version==1: db.execute("INSERT INTO teacher_report_settings VALUES('trs1','t1','sub1',1,'WEEKLY','18:00',7,NULL,0,NULL,'Asia/Aden','EMAIL','PDF',1,1,0,100,1)")
         else: db.execute("INSERT INTO teacher_report_settings VALUES('trs1','t1','sub1',1,'WEEKLY','18:00',7,NULL,0,NULL,'Asia/Aden','EMAIL','PDF',1,1,0,0,100,1)")
@@ -86,9 +93,14 @@ def m23(db):
 def m34(db):
     for s in M34: db.execute(s)
 
+def m45(db):
+    for s in M45: db.execute(s)
+
 def verify(db,label):
     # Historical rows/settings preserved
     assert db.execute("SELECT universityNumber FROM students WHERE id='s1'").fetchone()==('2026001',)
+    assert db.execute("SELECT fullName,version FROM teachers WHERE id='t1'").fetchone()==('Teacher One',1)
+    assert db.execute("SELECT scopeType,version FROM attendance_policies WHERE id='pol1'").fetchone()==('GLOBAL',1)
     assert db.execute("SELECT finalStatus,attendancePercentage FROM attendance_records WHERE id='ar1'").fetchone()==('PRESENT',100.0)
     ap=db.execute("SELECT lectureId,subjectId,description,status,syncStatus,version FROM attendance_appeals WHERE id='ap1'").fetchone();assert ap==('l1','sub1','Incorrect status','PENDING','LOCAL_ONLY',1),ap
     assert db.execute("SELECT status FROM report_jobs WHERE id='rp1'").fetchone()==('SENT',)
@@ -99,35 +111,47 @@ def verify(db,label):
     assert 'weeklyScheduleId' in cols(db,'timetables') and db.execute("SELECT weeklyScheduleId FROM timetables WHERE id='tt1'").fetchone()==(None,)
     assert 'actorRole' in cols(db,'audit_logs') and db.execute("SELECT actorRole FROM audit_logs WHERE id='au1'").fetchone()==(None,)
     for table in ['user_scopes','user_permission_grants','device_replacement_requests','weekly_timetable_versions']: assert table in {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert 'sync_entity_metadata' in {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     expected_indexes={
         'user_scopes':{'index_user_scopes_userId','index_user_scopes_scopeType_scopeId','index_user_scopes_active'},
         'user_permission_grants':{'index_user_permission_grants_userId','index_user_permission_grants_permissionCode','index_user_permission_grants_scopeType_scopeId','index_user_permission_grants_active','index_user_permission_grants_expiresAt'},
         'device_replacement_requests':{'index_device_replacement_requests_studentId','index_device_replacement_requests_status','index_device_replacement_requests_requestedAt'},
         'weekly_timetable_versions':{'index_weekly_timetable_versions_groupId','index_weekly_timetable_versions_weekStart','index_weekly_timetable_versions_status','index_weekly_timetable_versions_groupId_weekStart_versionNumber'},
-        'timetables':{'index_timetables_weeklyScheduleId'},'audit_logs':{'index_audit_logs_entityType_entityId_timestamp'}}
+        'timetables':{'index_timetables_weeklyScheduleId'},'audit_logs':{'index_audit_logs_entityType_entityId_timestamp'},
+        'sync_entity_metadata':{'index_sync_entity_metadata_entityType','index_sync_entity_metadata_updatedAt'}}
     for table,want in expected_indexes.items(): assert want<=idx(db,table),(label,table,want-idx(db,table))
     assert db.execute('PRAGMA foreign_key_check').fetchall()==[],(label,db.execute('PRAGMA foreign_key_check').fetchall())
     assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
 
 def run_path(start):
     db=create_base(start,True)
-    if start==1:m12(db);m23(db);m34(db)
-    elif start==2:m23(db);m34(db)
-    elif start==3:m34(db)
+    if start==1:m12(db);m23(db);m34(db);m45(db)
+    elif start==2:m23(db);m34(db);m45(db)
+    elif start==3:m34(db);m45(db)
     else:raise ValueError(start)
-    db.commit();verify(db,f'v{start}->v4');db.close();print(f'MIGRATION_PATH_{start}_TO_4=PASS')
+    db.commit();verify(db,f'v{start}->v5');db.close();print(f'MIGRATION_PATH_{start}_TO_5=PASS')
 
-def fresh_v4():
-    # A fresh representative v4 database uses the current final column/table/index set directly.
-    db=create_base(3,False);m34(db);db.commit()
-    # Seed only validation rows after schema exists, then verify FK acceptance/defaults.
+def run_4_to_5():
+    db=create_base(3,True);m34(db);db.commit()
+    # Seed v4-era queue/settings data to prove 4->5 is additive.
+    db.execute("CREATE TABLE sync_queue(id TEXT PRIMARY KEY,entityType TEXT,entityId TEXT,operation TEXT,payloadCiphertext TEXT,createdAt INTEGER,lastAttempt INTEGER,retryCount INTEGER,status TEXT,error TEXT,idempotencyKey TEXT,version INTEGER)")
+    db.execute("INSERT INTO sync_queue VALUES('q1','Teacher','t1','UPSERT','cipher',10,NULL,0,'SENT',NULL,'teacher:t1:1',1)")
+    m45(db);db.commit();verify(db,'v4->v5')
+    assert db.execute("SELECT status,idempotencyKey FROM sync_queue WHERE id='q1'").fetchone()==('SENT','teacher:t1:1')
+    assert db.execute("SELECT COUNT(*) FROM sync_entity_metadata").fetchone()==(0,)
+    db.close();print('MIGRATION_PATH_4_TO_5=PASS')
+
+def fresh_v5():
+    db=create_base(3,False);m34(db);m45(db);db.commit()
     db.execute("INSERT INTO users VALUES('u1','owner','Owner',1,1,1,1)");db.execute("INSERT INTO students VALUES('s1','2026001','Student One')")
     db.execute("INSERT INTO user_scopes VALUES('us1','u1','STUDENT','s1',1,1,'u1')")
     db.execute("INSERT INTO device_replacement_requests VALUES('dr1','s1',NULL,'new-device',NULL,NULL,'PENDING',1,NULL,NULL,NULL,1)")
-    db.commit();assert db.execute('PRAGMA foreign_key_check').fetchall()==[];assert 'weeklyScheduleId' in cols(db,'timetables');assert 'actorRole' in cols(db,'audit_logs');db.close();print('FRESH_V4_REPRESENTATIVE_SCHEMA=PASS')
+    db.execute("INSERT INTO sync_entity_metadata VALUES('University','uni1',1,1,1,'abc',NULL)")
+    db.commit();assert db.execute('PRAGMA foreign_key_check').fetchall()==[];assert db.execute("SELECT localVersion FROM sync_entity_metadata WHERE entityId='uni1'").fetchone()==(1,);db.close();print('FRESH_V5_REPRESENTATIVE_SCHEMA=PASS')
 
 def main():
-    fresh_v4()
+    fresh_v5()
     for start in (1,2,3):run_path(start)
+    run_4_to_5()
     print('DATABASE_FINAL_VALIDATION=PASS room_runtime_compile=DEFERRED_TO_GRADLE')
 if __name__=='__main__':main()

@@ -17,8 +17,9 @@ class AttachmentValidator(private val resolver:ContentResolver){
         private val ALLOWED_PREFIXES=listOf("image/","application/pdf")
     }
     fun validate(uri:Uri):AttachmentValidationResult{
-        val type=resolver.getType(uri)
-        if(type!=null && ALLOWED_PREFIXES.none{type.startsWith(it)}) return AttachmentValidationResult.Invalid("UNSUPPORTED_TYPE")
+        if(uri.scheme!=ContentResolver.SCHEME_CONTENT)return AttachmentValidationResult.Invalid("UNSUPPORTED_URI")
+        val type=resolver.getType(uri)?:return AttachmentValidationResult.Invalid("UNSUPPORTED_TYPE")
+        if(ALLOWED_PREFIXES.none{type.startsWith(it)}) return AttachmentValidationResult.Invalid("UNSUPPORTED_TYPE")
         val meta=query(uri)?:return AttachmentValidationResult.Invalid("FILE_NOT_FOUND")
         if(meta.sizeBytes<0) return AttachmentValidationResult.Invalid("UNKNOWN_SIZE")
         if(meta.sizeBytes>MAX_BYTES) return AttachmentValidationResult.Invalid("FILE_TOO_LARGE")
