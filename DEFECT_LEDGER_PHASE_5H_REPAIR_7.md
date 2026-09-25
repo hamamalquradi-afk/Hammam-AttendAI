@@ -175,3 +175,12 @@ D001-D124 remain intact. D113-D117 remain explicitly deferred to the penultimate
 | ID | AREA | SCREEN/FILE | DESCRIPTION | SEVERITY | SOURCE_CONFIRMED | RUNTIME_CONFIRMED | CURRENT_ROUND | FUTURE_ROUND | STATUS |
 |---|---|---|---|---|---|---|---|---|---|
 | D125 | Room runtime migration acceptance infrastructure | `android/app/src/androidTest/.../RoomMigrationRuntimeTest.kt`, `.github/workflows/android-build.yml` | The verified Repair-7 checkpoint contained Room `room-testing` but no `androidTest` migration suite and no historical schema JSON files. Repair-8 added a real Android instrumentation suite that reconstructs v1-v4 test databases by reversing only the exact production migration deltas from Room-created v5, plus a minimal emulator CI gate. The current environment cannot start Gradle/Android runtime and GitHub write access returns 403, so the suite cannot yet be executed and no runtime migration PASS is claimed. | HIGH | YES | NO | YES | Repair-8 runtime environment | BLOCKED |
+
+
+## PHASE 5H-RUNTIME-REPAIR-8R continuation
+
+D001-D125 remain intact. D113-D117 remain explicitly deferred to the penultimate comprehensive acceptance round.
+
+| ID | AREA | SCREEN/FILE | DESCRIPTION | SEVERITY | SOURCE_CONFIRMED | RUNTIME_CONFIRMED | CURRENT_ROUND | FUTURE_ROUND | STATUS |
+|---|---|---|---|---|---|---|---|---|---|
+| D126 | Room foreign-key runtime acceptance | `android/app/src/androidTest/.../RoomMigrationRuntimeTest.kt` | Six Repair-8 runtime migration tests stopped at `verifyDatabaseHealth()` because `PRAGMA foreign_keys` was read through Room's readable path under WAL and returned 0. Repair-8R replaces that connection-scoped equality assertion with a behavioral check: an invalid `user_roles` child insert using the actual Room-opened writable database must fail with a SQLite FOREIGN KEY constraint error. `PRAGMA foreign_key_check` must still return zero rows. No production code, migration, schema, DB version, entity set, or sync allowlist is changed. | HIGH | YES | PENDING_RERUN | YES | — | PATCHED_PENDING_FULL_RUNTIME_GATE |

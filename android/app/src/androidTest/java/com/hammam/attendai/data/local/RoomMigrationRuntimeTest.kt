@@ -1,6 +1,7 @@
 package com.hammam.attendai.data.local
 
 import android.content.Context
+import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
 import android.os.SystemClock
 import androidx.room.Room
@@ -331,9 +332,56 @@ class RoomMigrationRuntimeTest {
 
     private fun verifyDatabaseHealth(db: HammamDatabase) {
         assertEquals(5L, roomLong(db,"PRAGMA user_version"))
-        assertEquals(1L, roomLong(db,"PRAGMA foreign_keys"))
-        db.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { c -> assertFalse("Foreign-key violation after migration", c.moveToFirst()) }
+        verifyForeignKeyEnforcement(db)
+        db.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { c ->
+            assertFalse("Foreign-key violation after migration", c.moveToFirst())
+        }
         assertEquals("ok", roomString(db,"PRAGMA integrity_check"))
+    }
+
+    private fun verifyForeignKeyEnforcement(db: HammamDatabase) {
+        val sql = db.openHelper.writableDatabase
+        val missingUserId = "repair8-missing-user-${System.nanoTime()}"
+        val failure = runCatching {
+            sql.execSQL(
+                "INSERT INTO user_roles(userId,roleId) VALUES(?,?)",
+                arrayOf<Any?>(missingUserId, "role-owner")
+            )
+        }.exceptionOrNull()
+
+        if (failure == null) {
+            sql.execSQL(
+                "DELETE FROM user_roles WHERE userId=? AND roleId=?",
+                arrayOf<Any?>(missingUserId, "role-owner")
+            )
+        }
+
+        val readablePragma = roomLong(db, "PRAGMA foreign_keys")
+        assertNotNull(
+            "Room write path accepted an invalid user_roles child row; " +
+                "readable-connection PRAGMA foreign_keys=$readablePragma",
+            failure
+        )
+        assertTrue(
+            "Expected a SQLite FOREIGN KEY constraint failure but got " +
+                "${failure?.javaClass?.name}: ${failure?.message}; " +
+                "readable-connection PRAGMA foreign_keys=$readablePragma",
+            failure != null && isForeignKeyConstraintFailure(failure)
+        )
+    }
+
+    private fun isForeignKeyConstraintFailure(error: Throwable): Boolean {
+        var current: Throwable? = error
+        while (current != null) {
+            if (
+                current is SQLiteConstraintException &&
+                current.message?.contains("FOREIGN KEY", ignoreCase = true) == true
+            ) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
     }
 
     private fun assertHistoricalRowsPreserved(db:HammamDatabase,before:Map<String,Long>,startVersion:Int){
